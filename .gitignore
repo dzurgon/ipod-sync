@@ -36,3 +36,6 @@ logs/
 # Web app
 server/web/__pycache__/
 server/web/.venv/
+
+# Claude
+.claude/

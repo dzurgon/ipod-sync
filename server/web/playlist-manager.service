@@ -12,8 +12,8 @@ After=network.target
 
 [Service]
 Type=simple
-User=ben
-Group=ben
+User=jimin
+Group=jimin
 WorkingDirectory=/usr/local/lib/ipod-sync/web
 
 EnvironmentFile=/etc/ipod-sync/config.env

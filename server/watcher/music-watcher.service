@@ -13,8 +13,8 @@ Wants=docker.service
 
 [Service]
 Type=simple
-User=ben
-Group=ben
+User=jimin
+Group=jimin
 
 # Real config lives here — not in source control
 EnvironmentFile=/etc/ipod-sync/config.env
