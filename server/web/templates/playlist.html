@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ name }} — iPod Music Manager</title>
+  <script src="https://unpkg.com/htmx.org@1.9.12/dist/htmx.min.js"></script>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header>
+    <h1><a href="/">🎵 iPod Music Manager</a></h1>
+  </header>
+
+  <main>
+    <section class="card">
+      <h2>{{ name }} <span class="badge">{{ tracks|length }} tracks</span></h2>
+
+      <!-- Add track from library -->
+      <details class="add-track-panel">
+        <summary class="btn-primary">+ Add tracks from library</summary>
+        <div class="track-picker">
+          <input type="search" placeholder="Search tracks…" id="track-search"
+                 oninput="filterTracks(this.value)">
+          <div class="track-pick-list" id="track-pick-list">
+            {% for album in albums %}
+              {% for track in album.tracks %}
+              <div class="track-pick-item" data-label="{{ (album.name + ' ' + track)|lower }}">
+                <span class="track-pick-name">{{ album.name }} / {{ track }}</span>
+                <form action="/playlists/{{ name }}/add" method="post" style="display:inline">
+                  <input type="hidden" name="track_path" value="{{ album.name }}/{{ track }}">
+                  <button type="submit" class="btn-sm btn-primary">Add</button>
+                </form>
+              </div>
+              {% endfor %}
+            {% endfor %}
+          </div>
+        </div>
+      </details>
+
+      <!-- Track list -->
+      {% if tracks %}
+      <ol class="track-list">
+        {% for track in tracks %}
+        <li class="track-item">
+          <span class="track-path">{{ track }}</span>
+          <form action="/playlists/{{ name }}/remove" method="post" style="display:inline">
+            <input type="hidden" name="track_path" value="{{ track }}">
+            <button type="submit" class="btn-sm btn-danger">Remove</button>
+          </form>
+        </li>
+        {% endfor %}
+      </ol>
+      {% else %}
+        <p class="empty">No tracks in this playlist yet.</p>
+      {% endif %}
+    </section>
+  </main>
+
+  <script>
+    function filterTracks(q) {
+      q = q.toLowerCase();
+      document.querySelectorAll('.track-pick-item').forEach(el => {
+        el.style.display = el.dataset.label.includes(q) ? '' : 'none';
+      });
+    }
+  </script>
+</body>
+</html>

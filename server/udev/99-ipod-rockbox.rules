@@ -1,0 +1,29 @@
+# udev rule: trigger iPod sync when Rockbox iPod Classic is connected via USB
+#
+# Deploy to: /etc/udev/rules.d/99-ipod-rockbox.rules
+#
+# After deploying:
+#   sudo udevadm control --reload-rules
+#   sudo udevadm trigger
+#
+# To find your iPod's idVendor/idProduct:
+#   lsusb  →  look for "Apple, Inc. iPod"
+#   udevadm info --name=/dev/sdX --attribute-walk | grep -E 'idVendor|idProduct'
+#
+# Apple iPod Classic (all generations):  idVendor=05ac, idProduct=1261 (5th gen)
+# Adjust idProduct if yours differs — check with lsusb after connecting.
+
+# ── Rule 1: Tag the block device when iPod is seen ───────────────────────────
+SUBSYSTEM=="block", \
+  ENV{ID_VENDOR_ID}=="05ac", \
+  ENV{ID_MODEL_ID}=="1209", \
+  ENV{ID_FS_LABEL}=="IPOD", \
+  TAG+="ipod_rockbox"
+
+# ── Rule 2: On mount (partition appears), run sync script as user ben ─────────
+SUBSYSTEM=="block", \
+  ENV{ID_VENDOR_ID}=="05ac", \
+  ENV{ID_MODEL_ID}=="1209", \
+  ENV{ID_FS_LABEL}=="IPOD", \
+  ACTION=="add", \
+  RUN+="/usr/local/lib/ipod-sync/udev-trigger.sh"

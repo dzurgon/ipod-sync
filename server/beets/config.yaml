@@ -1,0 +1,105 @@
+# beets configuration for ipod-sync music pipeline
+# Deploy to: ~/.config/beets/config.yaml  (or pass with -c to beet)
+#
+# Run manually:  beet import -q /mnt/data/media/music/FLAC
+# Run via watcher: see server/watcher/music-watcher.sh
+
+# ── Library ───────────────────────────────────────────────────────────────────
+library: ~/.config/beets/library.db
+directory: /mnt/data/media/music/FLAC
+
+# ── Import behaviour ──────────────────────────────────────────────────────────
+import:
+  # Fully automatic — never prompt
+  timid: no
+  quiet: yes
+
+  # Move files into the correct folder structure (not copy)
+  move: yes
+
+  # Write tags to files
+  write: yes
+
+  # Resume interrupted imports automatically
+  resume: yes
+
+  # Don't ask about low-confidence matches; accept best match and log it
+  # (set to a value between 0–1; 0.5 is reasonable for most libraries)
+  strong_rec_thresh: 0.10
+  timid_rec_thresh: 0.25
+
+  # Log files that couldn't be matched so you can inspect them later
+  log: /var/log/ipod-sync/beets-import.log
+
+# ── Path templates ─────────────────────────────────────────────────────────────
+# Target: /mnt/data/media/music/FLAC/AlbumName - AlbumArtist (Year)/track.flac
+paths:
+  default: $album - $albumartist ($year)/$track - $title
+  comp: $album - Various Artists ($year)/$track - $artist - $title
+  singleton: Singletons/$artist - $title
+
+# ── Metadata fields ───────────────────────────────────────────────────────────
+# These are written to every matched file's tags
+per_disc_numbering: no
+
+# ── Plugins ───────────────────────────────────────────────────────────────────
+plugins:
+  - fetchart       # Download cover.jpg from MusicBrainz / Cover Art Archive
+  - embedart       # Optionally embed art in FLAC tags (disabled below — file art only)
+  - lastgenre      # Fetch genre tags from Last.fm tag data
+  - missing        # Log tracks missing from album
+  - duplicates     # Warn about duplicates rather than silently keeping both
+  - scrub          # Remove unwanted/excess tags after import
+
+# ── fetchart ──────────────────────────────────────────────────────────────────
+fetchart:
+  # Always save as cover.jpg in the album folder
+  filename: cover
+  # Source priority: Cover Art Archive first, then iTunes, then Amazon
+  sources:
+    - coverart    # MusicBrainz Cover Art Archive
+    - itunes
+    - amazon
+    - wikipedia
+  # Minimum image size (px) — reject tiny thumbnails
+  minwidth: 500
+  minheight: 500
+  # Re-fetch if existing art is below minimum size
+  enforce_ratio: no
+  # Don't embed — keep as separate cover.jpg file
+  store_source: yes
+
+# embedart is loaded but disabled — we want file-level cover.jpg, not embedded
+embedart:
+  auto: no
+
+# ── lastgenre ─────────────────────────────────────────────────────────────────
+lastgenre:
+  # Use Last.fm's tag data to pick a canonical genre
+  auto: yes
+  # Prefer artist-level tags over track-level for consistency
+  prefer_specific: no
+  # Cap to a whitelist of clean genre strings (optional, remove to allow any)
+  # whitelist: /etc/ipod-sync/genres.txt
+  count: 1
+
+# ── scrub ─────────────────────────────────────────────────────────────────────
+scrub:
+  # Runs automatically after import to strip non-standard tags
+  auto: yes
+
+# ── duplicates ────────────────────────────────────────────────────────────────
+duplicates:
+  # Just log duplicates, don't auto-delete
+  copy: no
+  move: no
+  delete: no
+
+# ── UI / output ───────────────────────────────────────────────────────────────
+ui:
+  color: no   # No ANSI colour codes in log output
+
+# ── MusicBrainz ───────────────────────────────────────────────────────────────
+musicbrainz:
+  # Rate-limit to stay within MusicBrainz API terms (1 req/sec)
+  searchlimit: 5

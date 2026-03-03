@@ -1,0 +1,36 @@
+# playlist-manager.service — systemd unit for the FastAPI playlist manager web app
+#
+# Deploy to: /etc/systemd/system/playlist-manager.service
+#
+# Enable & start:
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now playlist-manager
+
+[Unit]
+Description=iPod Playlist Manager web app
+After=network.target
+
+[Service]
+Type=simple
+User=ben
+Group=ben
+WorkingDirectory=/usr/local/lib/ipod-sync/web
+
+EnvironmentFile=/etc/ipod-sync/config.env
+Environment=CONFIG_FILE=/etc/ipod-sync/config.env
+
+ExecStart=/usr/local/lib/ipod-sync/web/.venv/bin/uvicorn \
+  app:app \
+  --host 0.0.0.0 \
+  --port 8337 \
+  --workers 1
+
+Restart=on-failure
+RestartSec=5
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=playlist-manager
+
+[Install]
+WantedBy=multi-user.target

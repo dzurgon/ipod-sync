@@ -1,0 +1,18 @@
+{% if playlists %}
+<ul class="playlist-list">
+  {% for pls in playlists %}
+  <li class="playlist-item">
+    <div class="playlist-meta">
+      <a href="/playlists/{{ pls.name }}" class="playlist-name">{{ pls.name }}</a>
+      <span class="playlist-info">{{ pls.track_count }} tracks · {{ pls.modified }}</span>
+    </div>
+    <form action="/playlists/{{ pls.name }}/delete" method="post"
+          onsubmit="return confirm('Delete playlist \'{{ pls.name }}\'?')">
+      <button type="submit" class="btn-danger btn-sm">Delete</button>
+    </form>
+  </li>
+  {% endfor %}
+</ul>
+{% else %}
+<p class="empty">No playlists yet. Create one above.</p>
+{% endif %}

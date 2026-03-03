@@ -1,0 +1,34 @@
+# music-watcher.service — systemd unit for the inotify music watcher
+#
+# Deploy to: /etc/systemd/system/music-watcher.service
+#
+# Enable & start:
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now music-watcher
+
+[Unit]
+Description=Music library watcher — triggers beets and Nextcloud rescan on new files
+After=network.target docker.service
+Wants=docker.service
+
+[Service]
+Type=simple
+User=ben
+Group=ben
+
+# Real config lives here — not in source control
+EnvironmentFile=/etc/ipod-sync/config.env
+
+ExecStart=/usr/local/lib/ipod-sync/music-watcher.sh
+
+# Always restart on failure; give it 10s between restarts
+Restart=on-failure
+RestartSec=10
+
+# Redirect stdout/stderr to journald (also written to LOG_DIR inside the script)
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=music-watcher
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,38 @@
+# Secrets — never commit real credentials
+config.env
+*.env
+!config.env.example
+
+# Last.fm session token
+lastfm-session
+*.session
+
+# Beets database (machine-local)
+server/beets/musicbrainz.db
+server/beets/library.db
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+*.egg-info/
+
+# Logs
+logs/
+*.log
+
+# macOS
+.DS_Store
+.AppleDouble
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Web app
+server/web/__pycache__/
+server/web/.venv/

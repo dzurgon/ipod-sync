@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>iPod Music Manager</title>
+  <script src="https://unpkg.com/htmx.org@1.9.12/dist/htmx.min.js"></script>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header>
+    <h1>🎵 iPod Music Manager</h1>
+    <nav>
+      <a href="/">Library</a>
+      <a href="#playlists">Playlists</a>
+      <a href="#feed">Activity</a>
+    </nav>
+  </header>
+
+  <main>
+    <!-- ── Activity Feed ──────────────────────────────────────────────── -->
+    <section id="feed" class="card">
+      <h2>Activity Feed</h2>
+      <div
+        hx-get="/feed"
+        hx-trigger="every 10s"
+        hx-swap="innerHTML"
+        id="feed-content"
+      >
+        {% include "_feed.html" %}
+      </div>
+    </section>
+
+    <!-- ── Playlists ──────────────────────────────────────────────────── -->
+    <section id="playlists" class="card">
+      <h2>Playlists <span class="badge">{{ playlists|length }}</span></h2>
+
+      <form action="/playlists/new" method="post" class="inline-form">
+        <input type="text" name="name" placeholder="New playlist name…" required>
+        <button type="submit" class="btn-primary">+ Create</button>
+      </form>
+
+      <div id="playlist-list">
+        {% include "_playlists.html" %}
+      </div>
+    </section>
+
+    <!-- ── Library ────────────────────────────────────────────────────── -->
+    <section id="library" class="card">
+      <h2>Library <span class="badge">{{ albums|length }} albums</span></h2>
+
+      {% if not albums %}
+        <p class="empty">No albums found at <code>{{ config.MUSIC_DIR }}</code>.</p>
+      {% else %}
+        <input
+          class="search"
+          type="search"
+          placeholder="Filter albums…"
+          oninput="filterAlbums(this.value)"
+          id="album-search"
+        >
+        <div class="album-grid" id="album-grid">
+          {% for album in albums %}
+          <div class="album-card" data-name="{{ album.name|lower }}">
+            {% if album.cover %}
+              <img
+                src="/static/cover-placeholder.svg"
+                data-src="/album-art/{{ album.name }}/{{ album.cover }}"
+                alt="Cover"
+                class="album-art lazy"
+                loading="lazy"
+              >
+            {% else %}
+              <div class="album-art no-art">♪</div>
+            {% endif %}
+            <div class="album-info">
+              <strong class="album-name">{{ album.name }}</strong>
+              <span class="track-count">{{ album.track_count }} tracks</span>
+            </div>
+          </div>
+          {% endfor %}
+        </div>
+      {% endif %}
+    </section>
+
+    <!-- ── Recent Sync Logs ───────────────────────────────────────────── -->
+    {% if logs %}
+    <section id="sync-logs" class="card">
+      <h2>Recent Syncs</h2>
+      <table class="log-table">
+        <thead><tr><th>Log File</th><th>Size</th><th>Time</th><th></th></tr></thead>
+        <tbody>
+          {% for log in logs %}
+          <tr>
+            <td>{{ log.name }}</td>
+            <td>{{ log.size }}</td>
+            <td>{{ log.modified }}</td>
+            <td><a href="/logs/{{ log.name }}" class="btn-sm">View</a></td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </section>
+    {% endif %}
+  </main>
+
+  <script>
+    function filterAlbums(query) {
+      const q = query.toLowerCase();
+      document.querySelectorAll('.album-card').forEach(card => {
+        card.style.display = card.dataset.name.includes(q) ? '' : 'none';
+      });
+    }
+  </script>
+</body>
+</html>
