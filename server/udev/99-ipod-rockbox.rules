@@ -17,13 +17,12 @@
 SUBSYSTEM=="block", \
   ENV{ID_VENDOR_ID}=="05ac", \
   ENV{ID_MODEL_ID}=="1209", \
-  ENV{ID_FS_LABEL}=="IPOD", \
   TAG+="ipod_rockbox"
 
-# ── Rule 2: On mount (partition appears), run sync script as user ben ─────────
+# ── Rule 2: On connect, run sync script as user jimin ─────────────────────────
+# Label check omitted — iPod is mounted at a fixed path (IPOD_MOUNT_PATH in config).
 SUBSYSTEM=="block", \
   ENV{ID_VENDOR_ID}=="05ac", \
   ENV{ID_MODEL_ID}=="1209", \
-  ENV{ID_FS_LABEL}=="IPOD", \
   ACTION=="add", \
   RUN+="/usr/local/lib/ipod-sync/udev-trigger.sh"

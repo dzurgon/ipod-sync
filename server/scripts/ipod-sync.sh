@@ -52,16 +52,29 @@ MOUNT_TIMEOUT=60
 ELAPSED=0
 IPOD_MOUNT=""
 
-while [[ $ELAPSED -lt $MOUNT_TIMEOUT ]]; do
-  # Look for a mounted filesystem whose label is IPOD
-  if mount_point=$(findmnt -rn -o TARGET -L IPOD 2>/dev/null) && [[ -n "$mount_point" ]]; then
-    IPOD_MOUNT="$mount_point"
-    log "iPod mounted at: $IPOD_MOUNT"
-    break
+# If IPOD_MOUNT is set in config, use it directly; otherwise auto-detect via findmnt
+if [[ -n "${IPOD_MOUNT_OVERRIDE:-}" ]]; then
+  if mountpoint -q "$IPOD_MOUNT_OVERRIDE"; then
+    IPOD_MOUNT="$IPOD_MOUNT_OVERRIDE"
+    log "iPod mounted at (from config): $IPOD_MOUNT"
+  else
+    die "IPOD_MOUNT_OVERRIDE is set to '$IPOD_MOUNT_OVERRIDE' but it is not a mountpoint."
   fi
-  sleep 2
-  ELAPSED=$(( ELAPSED + 2 ))
-done
+else
+  while [[ $ELAPSED -lt $MOUNT_TIMEOUT ]]; do
+    # Try config-specified mount path first, then fall back to label-based detection
+    for candidate in "${IPOD_MOUNT_PATH:-}" "$(findmnt -rn -o TARGET -L IPOD 2>/dev/null)"; do
+      [[ -z "$candidate" ]] && continue
+      if mountpoint -q "$candidate" 2>/dev/null; then
+        IPOD_MOUNT="$candidate"
+        log "iPod mounted at: $IPOD_MOUNT"
+        break 2
+      fi
+    done
+    sleep 2
+    ELAPSED=$(( ELAPSED + 2 ))
+  done
+fi
 
 if [[ -z "$IPOD_MOUNT" ]]; then
   die "iPod not mounted after ${MOUNT_TIMEOUT}s. Aborting."
