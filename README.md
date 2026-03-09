@@ -4,7 +4,18 @@ Automated music management for iPod Classic (Rockbox) + Linux home server + Mac.
 
 Plug in your iPod — everything else happens automatically.
 
----
+# Quick start
+
+```bash
+# !! must run in sudo if iPod is formatted vfat !!
+sudo CONFIG_FILE=/etc/ipod-sync/config.env /usr/local/lib/ipod-sync/ipod-sync.sh
+
+## check work at:
+vim /
+```
+
+
+# Overview
 
 ## What it does
 

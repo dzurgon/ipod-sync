@@ -101,6 +101,9 @@ log "Destination: $IPOD_MUSIC_DIR"
 # --times           : preserve modification times (vfat supports this)
 # --modify-window=2 : vfat timestamps have 2s granularity — skip files within that window
 # --delete          : remove files on iPod that no longer exist on server
+# --info=progress2  : single live-updating progress line in terminal (bytes%, speed, ETA,
+#                     and "to-chk=N/TOTAL" showing files remaining vs total scanned)
+# --log-file        : per-file transfer log goes to the log file (not mixed with progress)
 # NO --archive      : archive includes --owner/--group/--perms which vfat rejects
 # NO --checksum     : too slow on large libraries; modify-window handles clock skew
 
@@ -111,6 +114,7 @@ rsync \
   --delete \
   --human-readable \
   --stats \
+  --info=progress2 \
   --exclude='.DS_Store' \
   --exclude='._*' \
   --exclude='.Spotlight-*' \
@@ -119,8 +123,7 @@ rsync \
   --log-file="$LOGFILE" \
   --log-file-format='%t [rsync] %o %f (%b bytes)' \
   "$MUSIC_DIR/" \
-  "$IPOD_MUSIC_DIR/" \
-  | tee -a "$LOGFILE"
+  "$IPOD_MUSIC_DIR/"
 
 log "Music sync complete."
 
