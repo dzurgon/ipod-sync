@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ album }} — iPod Music Manager</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <style>
+    .album-header {
+      display: flex;
+      gap: 1.5rem;
+      align-items: flex-start;
+      margin-bottom: 1.5rem;
+    }
+    .album-header-art {
+      width: 140px;
+      height: 140px;
+      object-fit: cover;
+      border-radius: var(--radius);
+      flex-shrink: 0;
+      background: var(--border);
+    }
+    .album-header-art.no-art {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 3rem;
+      color: var(--muted);
+    }
+    .album-header-info { flex: 1; }
+    .album-header-info h2 { font-size: 1.1rem; margin-bottom: 0.25rem; }
+    .album-header-info .meta { color: var(--muted); font-size: 0.85rem; }
+
+    .track-table { width: 100%; border-collapse: collapse; }
+    .track-table th {
+      text-align: left;
+      padding: 0.4rem 0.5rem;
+      font-size: 0.75rem;
+      color: var(--muted);
+      border-bottom: 1px solid var(--border);
+      font-weight: 500;
+    }
+    .track-row td {
+      padding: 0.45rem 0.5rem;
+      border-bottom: 1px solid var(--border);
+      font-size: 0.85rem;
+      vertical-align: middle;
+    }
+    .track-row:last-child td { border-bottom: none; }
+    .track-row:hover td { background: var(--border); }
+
+    .track-num { color: var(--muted); width: 2rem; text-align: right; }
+    .track-name { font-family: var(--mono); font-size: 0.8rem; word-break: break-all; }
+
+    .add-form { display: flex; gap: 0.4rem; align-items: center; }
+    .add-form select {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      color: var(--text);
+      padding: 0.25rem 0.4rem;
+      font-size: 0.78rem;
+      max-width: 140px;
+    }
+    .no-playlists { color: var(--muted); font-size: 0.8rem; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1><a href="/">🎵 iPod Music Manager</a></h1>
+    <nav>
+      <a href="/">← Library</a>
+    </nav>
+  </header>
+
+  <main>
+    <section class="card">
+      <div class="album-header">
+        {% if cover %}
+          <img src="/album-art/{{ rel_path|urlencode }}/{{ cover }}"
+               alt="Cover" class="album-header-art">
+        {% else %}
+          <div class="album-header-art no-art">♪</div>
+        {% endif %}
+        <div class="album-header-info">
+          {% if artist %}<p class="meta">{{ artist }}</p>{% endif %}
+          <h2>{{ album }}</h2>
+          <p class="meta">{{ tracks|length }} tracks</p>
+          {% if playlists %}
+            <p class="meta" style="margin-top:0.5rem">
+              Click <strong>Add</strong> next to any track to add it to a playlist.
+            </p>
+          {% else %}
+            <p class="meta" style="margin-top:0.5rem">
+              No playlists yet — <a href="/">create one first</a>.
+            </p>
+          {% endif %}
+        </div>
+      </div>
+
+      {% if tracks %}
+      <table class="track-table">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>File</th>
+            <th>Add to playlist</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for track in tracks %}
+          <tr class="track-row">
+            <td class="track-num">{{ loop.index }}</td>
+            <td class="track-name">{{ track }}</td>
+            <td>
+              {% if playlists %}
+              <form class="add-form" action="/playlists/{{ playlists[0].name }}/add"
+                    method="post"
+                    onsubmit="this.action='/playlists/'+this.querySelector('select').value+'/add'">
+                <select name="playlist_select" onchange="this.form.action='/playlists/'+this.value+'/add'">
+                  {% for pls in playlists %}
+                  <option value="{{ pls.name }}">{{ pls.name }}</option>
+                  {% endfor %}
+                </select>
+                {# Path relative to Playlists/ dir — works on both server and iPod #}
+                <input type="hidden" name="track_path"
+                       value="../FLAC/{{ rel_path }}/{{ track }}">
+                <input type="hidden" name="next"
+                       value="/album/{{ rel_path|urlencode }}">
+                <button type="submit" class="btn-primary btn-sm">Add</button>
+              </form>
+              {% else %}
+              <span class="no-playlists">—</span>
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+        <p class="empty">No audio files found in this folder.</p>
+      {% endif %}
+    </section>
+  </main>
+</body>
+</html>

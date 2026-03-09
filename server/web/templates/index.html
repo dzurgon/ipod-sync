@@ -61,11 +61,12 @@
         >
         <div class="album-grid" id="album-grid">
           {% for album in albums %}
-          <div class="album-card" data-name="{{ album.name|lower }}">
+          <a class="album-card" data-name="{{ (album.artist + ' ' + album.name)|lower }}"
+             href="/album/{{ album.rel_path|urlencode }}">
             {% if album.cover %}
               <img
                 src=""
-                data-src="/album-art/{{ album.name|urlencode }}/{{ album.cover }}"
+                data-src="/album-art/{{ album.rel_path|urlencode }}/{{ album.cover }}"
                 alt="Cover"
                 class="album-art lazy"
               >
@@ -74,9 +75,12 @@
             {% endif %}
             <div class="album-info">
               <strong class="album-name">{{ album.name }}</strong>
+              {% if album.artist %}
+                <span class="artist-name">{{ album.artist }}</span>
+              {% endif %}
               <span class="track-count">{{ album.track_count }} tracks</span>
             </div>
-          </div>
+          </a>
           {% endfor %}
         </div>
       {% endif %}

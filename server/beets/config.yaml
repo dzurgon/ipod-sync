@@ -32,11 +32,11 @@ import:
   log: /var/log/ipod-sync/beets-import.log
 
 # ── Path templates ─────────────────────────────────────────────────────────────
-# Target: /mnt/data/media/music/FLAC/AlbumName - AlbumArtist (Year)/track.flac
+# Target: /mnt/data/media/music/FLAC/Artist/Album (Year)/01 - Title.flac
 paths:
-  default: $album - $albumartist ($year)/$track - $title
-  comp: $album - Various Artists ($year)/$track - $artist - $title
-  singleton: Singletons/$artist - $title
+  default: $albumartist/$album ($year)/$track - $title
+  comp: Various Artists/$album ($year)/$track - $artist - $title
+  singleton: $albumartist/Singles/$title
 
 # ── Metadata fields ───────────────────────────────────────────────────────────
 # These are written to every matched file's tags

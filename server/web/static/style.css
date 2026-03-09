@@ -214,6 +214,10 @@ input[type="search"]:focus {
   border-radius: var(--radius);
   overflow: hidden;
   transition: border-color 0.2s;
+  text-decoration: none;
+  color: inherit;
+  display: block;
+  cursor: pointer;
 }
 .album-card:hover { border-color: var(--accent); }
 
@@ -246,11 +250,21 @@ input[type="search"]:focus {
   white-space: nowrap;
 }
 
+.artist-name {
+  display: block;
+  font-size: 0.72rem;
+  color: var(--accent);
+  margin-top: 0.15rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .track-count {
   display: block;
   font-size: 0.72rem;
   color: var(--muted);
-  margin-top: 0.2rem;
+  margin-top: 0.1rem;
 }
 
 /* ── Playlist detail ───────────────────────────────────────────────────────── */

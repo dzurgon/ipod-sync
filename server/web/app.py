@@ -77,29 +77,47 @@ templates.env.filters["urlencode"] = urllib.parse.quote
 
 # ── Library helpers ───────────────────────────────────────────────────────────
 
+AUDIO_EXTS = {".flac", ".mp3", ".ogg", ".opus", ".m4a", ".aac"}
+
+
+def _album_dict(album_dir: Path, rel_path: str, artist: str) -> dict:
+    tracks = sorted(t for t in album_dir.iterdir() if t.suffix.lower() in AUDIO_EXTS)
+    cover = next(
+        (f.name for f in album_dir.iterdir()
+         if f.name.lower() in {"cover.jpg", "cover.png", "folder.jpg"}),
+        None,
+    )
+    return {
+        "name":        album_dir.name,
+        "artist":      artist,
+        "rel_path":    rel_path,      # relative to MUSIC_DIR, e.g. "Artist/Album (Year)"
+        "track_count": len(tracks),
+        "tracks":      [t.name for t in tracks],
+        "cover":       cover,
+    }
+
+
 def scan_library() -> list[dict]:
-    """Return list of album dicts from MUSIC_DIR."""
+    """Return album dicts, supporting both flat and Artist/Album (Year) layouts."""
     albums = []
     if not MUSIC_DIR.exists():
         return albums
-    for album_dir in sorted(MUSIC_DIR.iterdir()):
-        if not album_dir.is_dir():
+    for entry in sorted(MUSIC_DIR.iterdir()):
+        if not entry.is_dir():
             continue
-        tracks = sorted(
-            t for t in album_dir.iterdir()
-            if t.suffix.lower() in {".flac", ".mp3", ".ogg", ".opus", ".m4a", ".aac"}
-        )
-        cover = next((
-            str(f.name) for f in album_dir.iterdir()
-            if f.name.lower() in {"cover.jpg", "cover.png", "folder.jpg"}
-        ), None)
-        albums.append({
-            "name":       album_dir.name,
-            "path":       str(album_dir),
-            "track_count": len(tracks),
-            "tracks":     [t.name for t in tracks],
-            "cover":      cover,
-        })
+        children = list(entry.iterdir())
+        has_audio   = any(f.suffix.lower() in AUDIO_EXTS for f in children if f.is_file())
+        has_subdirs = any(f.is_dir() for f in children)
+
+        if has_audio:
+            # Flat album at root level (e.g. old-style or un-beeted folder)
+            albums.append(_album_dict(entry, entry.name, artist=""))
+        elif has_subdirs:
+            # Artist folder — iterate album subdirectories
+            for album_dir in sorted(entry.iterdir()):
+                if album_dir.is_dir():
+                    rel = f"{entry.name}/{album_dir.name}"
+                    albums.append(_album_dict(album_dir, rel, artist=entry.name))
     return albums
 
 
@@ -152,19 +170,37 @@ async def index(request: Request):
     })
 
 
+# ── Album detail ─────────────────────────────────────────────────────────────
+
+@app.get("/album/{rel_path:path}", response_class=HTMLResponse)
+async def view_album(request: Request, rel_path: str):
+    album_dir = MUSIC_DIR / rel_path
+    if not album_dir.is_dir():
+        raise HTTPException(404, "Album not found.")
+    data = _album_dict(album_dir, rel_path, artist=Path(rel_path).parent.name)
+    return templates.TemplateResponse("album.html", {
+        "request":   request,
+        "album":     data["name"],
+        "rel_path":  rel_path,
+        "artist":    data["artist"],
+        "tracks":    data["tracks"],
+        "cover":     data["cover"],
+        "playlists": scan_playlists(),
+    })
+
+
 # ── Album art ────────────────────────────────────────────────────────────────
 
-@app.get("/album-art/{album_name}/{filename}")
-async def album_art(album_name: str, filename: str):
-    """Serve cover art images directly from the music library."""
-    # Sanitise both path components — no traversal
-    if ".." in album_name or ".." in filename or "/" in filename:
+@app.get("/album-art/{image_path:path}")
+async def album_art(image_path: str):
+    """Serve cover art. image_path is relative to MUSIC_DIR, e.g. Artist/Album/cover.jpg"""
+    if ".." in image_path:
         raise HTTPException(400, "Invalid path.")
-    image_path = MUSIC_DIR / album_name / filename
-    if not image_path.exists():
+    full_path = MUSIC_DIR / image_path
+    if not full_path.exists() or not full_path.is_file():
         raise HTTPException(404, "Cover art not found.")
-    media_type = "image/jpeg" if filename.lower().endswith(".jpg") else "image/png"
-    return FileResponse(image_path, media_type=media_type)
+    media_type = "image/jpeg" if full_path.suffix.lower() == ".jpg" else "image/png"
+    return FileResponse(full_path, media_type=media_type)
 
 
 # ── Playlist CRUD ─────────────────────────────────────────────────────────────
@@ -211,17 +247,22 @@ async def view_playlist(request: Request, name: str):
 
 
 @app.post("/playlists/{name}/add")
-async def add_track(name: str, track_path: str = Form(...)):
-    """Add a relative track path to a playlist."""
+async def add_track(name: str, track_path: str = Form(...), next: str = Form(default="")):
+    """Add a relative track path to a playlist. Redirects to `next` if provided."""
     path = PLAYLIST_DIR / f"{name}.m3u"
     if not path.exists():
         raise HTTPException(404, "Playlist not found.")
-    # Normalise to forward-slash relative path
     rel = track_path.replace("\\", "/").strip("/")
-    with open(path, "a", encoding="utf-8") as f:
-        f.write(rel + "\n")
-    push_event("info", f"Added track to '{name}': {Path(rel).name}")
-    return RedirectResponse(f"/playlists/{name}", status_code=303)
+    # Prevent duplicate entries
+    existing = path.read_text(encoding="utf-8", errors="replace")
+    if rel not in [l.strip() for l in existing.splitlines()]:
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(rel + "\n")
+        push_event("success", f"Added to '{name}': {Path(rel).name}")
+    else:
+        push_event("info", f"Already in '{name}': {Path(rel).name}")
+    redirect_to = next if (next and next.startswith("/")) else f"/playlists/{name}"
+    return RedirectResponse(redirect_to, status_code=303)
 
 
 @app.post("/playlists/{name}/remove")
