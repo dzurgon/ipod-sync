@@ -17,12 +17,13 @@ import re
 import json
 import glob
 import shutil
+import urllib.parse
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
 from fastapi import FastAPI, Request, Form, HTTPException
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -71,6 +72,7 @@ app = FastAPI(title="iPod Playlist Manager")
 _here = Path(__file__).parent
 app.mount("/static", StaticFiles(directory=_here / "static"), name="static")
 templates = Jinja2Templates(directory=_here / "templates")
+templates.env.filters["urlencode"] = urllib.parse.quote
 
 
 # ── Library helpers ───────────────────────────────────────────────────────────
@@ -148,6 +150,21 @@ async def index(request: Request):
         "feed":      _feed,
         "logs":      read_recent_logs(),
     })
+
+
+# ── Album art ────────────────────────────────────────────────────────────────
+
+@app.get("/album-art/{album_name}/{filename}")
+async def album_art(album_name: str, filename: str):
+    """Serve cover art images directly from the music library."""
+    # Sanitise both path components — no traversal
+    if ".." in album_name or ".." in filename or "/" in filename:
+        raise HTTPException(400, "Invalid path.")
+    image_path = MUSIC_DIR / album_name / filename
+    if not image_path.exists():
+        raise HTTPException(404, "Cover art not found.")
+    media_type = "image/jpeg" if filename.lower().endswith(".jpg") else "image/png"
+    return FileResponse(image_path, media_type=media_type)
 
 
 # ── Playlist CRUD ─────────────────────────────────────────────────────────────
