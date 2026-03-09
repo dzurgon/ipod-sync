@@ -96,15 +96,18 @@ section "Syncing music: server → iPod"
 log "Source:      $MUSIC_DIR"
 log "Destination: $IPOD_MUSIC_DIR"
 
-# --checksum        : compare content, not just timestamps (iPod clock can drift)
+# Flags chosen for vfat (iPod filesystem):
+# --recursive       : recurse into directories
+# --times           : preserve modification times (vfat supports this)
+# --modify-window=2 : vfat timestamps have 2s granularity — skip files within that window
 # --delete          : remove files on iPod that no longer exist on server
-# --exclude         : skip macOS noise and hidden files
-# --progress        : visible in journal / log
-# --stats           : summary at end
+# NO --archive      : archive includes --owner/--group/--perms which vfat rejects
+# NO --checksum     : too slow on large libraries; modify-window handles clock skew
 
 rsync \
-  --archive \
-  --checksum \
+  --recursive \
+  --times \
+  --modify-window=2 \
   --delete \
   --human-readable \
   --stats \
