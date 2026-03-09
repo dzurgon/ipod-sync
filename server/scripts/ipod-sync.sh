@@ -123,7 +123,20 @@ rsync \
   --log-file="$LOGFILE" \
   --log-file-format='%t [rsync] %o %f (%b bytes)' \
   "$MUSIC_DIR/" \
-  "$IPOD_MUSIC_DIR/"
+  "$IPOD_MUSIC_DIR/" \
+  || {
+    rsync_code=$?
+    # Exit code 23 = some files skipped (e.g. vfat-incompatible names, permissions)
+    # Exit code 24 = some files vanished mid-transfer (harmless race condition)
+    # Both are non-fatal — log a warning and continue to scrobble/playlist steps.
+    if [[ $rsync_code -eq 23 || $rsync_code -eq 24 ]]; then
+      warn "rsync finished with skipped files (code $rsync_code)."
+      warn "Likely cause: folder names with special characters (♯ ∞ trailing spaces) that"
+      warn "vfat cannot store. Run 'beet import -q' on those albums to rename them cleanly."
+    else
+      die "rsync failed with code $rsync_code — aborting."
+    fi
+  }
 
 log "Music sync complete."
 
@@ -192,4 +205,4 @@ log "Log saved to: $LOGFILE"
 log "iPod is safe to unplug."
 
 # Optional: desktop notification if running in a graphical session
-# notify-send "iPod Sync" "Sync complete. Safe to unplug." 2>/dev/null || true
+notify-send "iPod Sync" "Sync complete. Safe to unplug." 2>/dev/null || true
