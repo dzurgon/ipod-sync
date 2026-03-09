@@ -101,5 +101,6 @@ ui:
 
 # ── MusicBrainz ───────────────────────────────────────────────────────────────
 musicbrainz:
-  # Rate-limit to stay within MusicBrainz API terms (1 req/sec)
   searchlimit: 5
+  # Abort a hung MusicBrainz request after 10 seconds and skip that album
+  timeout: 10
