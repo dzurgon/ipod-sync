@@ -1,0 +1,15 @@
+# mount-watchdog.timer — run the mount health check every 3 minutes.
+#
+# Deploy to: /etc/systemd/system/mount-watchdog.timer
+# Enable:    sudo systemctl daemon-reload && sudo systemctl enable --now mount-watchdog.timer
+
+[Unit]
+Description=iPod-sync: periodic /mnt/data health check
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=3min
+AccuracySec=15s
+
+[Install]
+WantedBy=timers.target

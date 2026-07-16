@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  com.ben.cd-sync.plist — launchd agent that pushes CD rips to the NUC.
+
+  Install:
+    cp mac/cd-sync.sh ~/bin/cd-sync.sh   # or anywhere; update ProgramArguments path
+    chmod +x ~/bin/cd-sync.sh
+    cp mac/com.ben.cd-sync.plist ~/Library/LaunchAgents/
+    launchctl load  ~/Library/LaunchAgents/com.ben.cd-sync.plist
+    # (to reload after edits)
+    launchctl unload ~/Library/LaunchAgents/com.ben.cd-sync.plist
+    launchctl load   ~/Library/LaunchAgents/com.ben.cd-sync.plist
+
+  WatchPaths makes launchd re-run the script whenever the Apple Music library
+  folder changes (i.e. right after a CD finishes importing). The script debounces,
+  so a multi-track import triggers a single push.
+
+  NOTE: WatchPaths watches the named directory's contents. Apple Music writes into
+  per-artist subfolders; watching the top Music folder catches the mtime bump on
+  import. If your Music library uses a different top path, edit both entries below.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.ben.cd-sync</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/ben/bin/cd-sync.sh</string>
+    </array>
+
+    <key>WatchPaths</key>
+    <array>
+        <string>/Users/ben/Music/Music/Media.localized/Music</string>
+    </array>
+
+    <key>StandardOutPath</key>
+    <string>/Users/ben/Library/Logs/ipod-sync/cd-sync.launchd.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/ben/Library/Logs/ipod-sync/cd-sync.launchd.log</string>
+
+    <!-- Don't hammer: launchd won't relaunch more than once per this interval. -->
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+
+    <key>RunAtLoad</key>
+    <false/>
+</dict>
+</plist>

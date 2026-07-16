@@ -24,24 +24,23 @@ source "$CONFIG_FILE"
 LOG_DIR="${LOG_DIR:-/var/log/ipod-sync}"
 mkdir -p "$LOG_DIR"
 LOGFILE="$LOG_DIR/ipod-sync-$(date '+%Y%m%d-%H%M%S').log"
+EVENT_SOURCE="sync"
 
 # Keep only the last 30 sync logs
 find "$LOG_DIR" -name 'ipod-sync-*.log' | sort | head -n -30 | xargs -r rm --
 
 SCROBBLE_SCRIPT="/usr/local/lib/ipod-sync/scrobble.py"
 
-# ── Logging helpers ───────────────────────────────────────────────────────────
-log()  { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "$LOGFILE"; }
-warn() { log "WARN: $*"; }
-die()  { log "ERROR: $*"; exit 1; }
+# ── Shared helpers (log/warn/die/section, emit_event, require_healthy_mount) ────
+LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib"
+[[ -f "$LIB_DIR/common.sh" ]] || LIB_DIR="/usr/local/lib/ipod-sync/lib"
+# shellcheck source=/dev/null
+source "$LIB_DIR/common.sh"
 
-# ── Section headers ───────────────────────────────────────────────────────────
-section() {
-  log ""
-  log "════════════════════════════════════════"
-  log "  $*"
-  log "════════════════════════════════════════"
-}
+# ── Guard: refuse to run if the data volume isn't healthily mounted ─────────────
+# Protects against a dropped 4TB drive: an erroring/empty source with --delete
+# could otherwise wipe the iPod copy or write into the bare mountpoint.
+require_healthy_mount "${DATA_MOUNT:-/mnt/data}"
 
 # ══════════════════════════════════════════════════════════════════════════════
 # 1. WAIT FOR MOUNT
@@ -87,6 +86,7 @@ IPOD_SCROBBLER_LOG="${IPOD_MOUNT}/.scrobbler.log"
 
 # Ensure directories exist on iPod
 mkdir -p "$IPOD_MUSIC_DIR" "$IPOD_PLAYLIST_DIR"
+emit_event sync info "iPod sync started" "$(basename "$LOGFILE")"
 
 # ══════════════════════════════════════════════════════════════════════════════
 # 2. SYNC MUSIC  (server → iPod, server is authoritative)
@@ -107,11 +107,16 @@ log "Destination: $IPOD_MUSIC_DIR"
 # NO --archive      : archive includes --owner/--group/--perms which vfat rejects
 # NO --checksum     : too slow on large libraries; modify-window handles clock skew
 
+# --max-delete=200 : safety cap. If a source glitch (e.g. drive hiccup that slipped
+#                    past the mount guard) makes the library look empty, rsync aborts
+#                    rather than deleting the whole iPod. Raise if you legitimately
+#                    remove >200 files at once.
 rsync \
   --recursive \
   --times \
   --modify-window=2 \
   --delete \
+  --max-delete=200 \
   --human-readable \
   --stats \
   --info=progress2 \
@@ -203,6 +208,7 @@ fi
 section "Sync complete"
 log "Log saved to: $LOGFILE"
 log "iPod is safe to unplug."
+emit_event sync success "iPod sync complete — safe to unplug" "$(basename "$LOGFILE")"
 
 # Optional: desktop notification if running in a graphical session
 notify-send "iPod Sync" "Sync complete. Safe to unplug." 2>/dev/null || true

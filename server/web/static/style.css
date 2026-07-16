@@ -166,11 +166,73 @@ input[type="search"]:focus {
 
 .feed-time { color: var(--muted); font-family: var(--mono); font-size: 0.8rem; white-space: nowrap; }
 .feed-msg  { flex: 1; }
+.feed-detail { display: block; color: var(--muted); font-size: 0.78rem; margin-top: 0.1rem; }
 
 .feed-success { border-left: 3px solid var(--accent); }
 .feed-info    { border-left: 3px solid #3498db; }
 .feed-warning { border-left: 3px solid var(--warning); }
 .feed-error   { border-left: 3px solid var(--danger); }
+
+/* Taller feed now that it's persistent history, not a tiny buffer */
+.feed-list { max-height: 55vh; }
+
+/* Filter controls */
+.feed-controls {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+.feed-controls select {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  padding: 0.4rem 0.6rem;
+  font-size: 0.85rem;
+  outline: none;
+}
+.feed-controls .search { margin-bottom: 0; }
+
+/* Source badges */
+.feed-source {
+  font-size: 0.68rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  padding: 0.05rem 0.4rem;
+  border-radius: 4px;
+  white-space: nowrap;
+  background: var(--border);
+  color: var(--text);
+}
+.src-cd       { background: #8e44ad; color: #fff; }
+.src-upload   { background: #2c3e50; color: #fff; }
+.src-ipod     { background: var(--accent); color: #000; }
+.src-sync     { background: #2980b9; color: #fff; }
+.src-beets    { background: #d35400; color: #fff; }
+.src-playlist { background: #16a085; color: #fff; }
+.src-mount    { background: var(--warning); color: #000; }
+
+/* ── Mobile (phone-friendly library + feed) ──────────────────────────────────── */
+
+@media (max-width: 640px) {
+  header { padding: 0.75rem 1rem; gap: 1rem; flex-wrap: wrap; }
+  nav { gap: 1rem; }
+  main { margin: 1rem auto; padding: 0 0.75rem; gap: 1rem; }
+  .card { padding: 1rem; }
+
+  /* Smaller album tiles so more fit across a phone */
+  .album-grid { grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 0.6rem; }
+
+  /* Stack the feed filter controls */
+  .feed-controls { flex-direction: column; }
+  .feed-list { max-height: 60vh; }
+  .feed-item { flex-wrap: wrap; gap: 0.4rem; }
+
+  /* Let long log lines wrap instead of forcing horizontal scroll */
+  .log-table { font-size: 0.8rem; }
+  .inline-form { flex-wrap: wrap; }
+}
 
 /* ── Playlists ─────────────────────────────────────────────────────────────── */
 

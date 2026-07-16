@@ -1,0 +1,15 @@
+# mount-watchdog.service — one-shot health check, invoked by mount-watchdog.timer
+#
+# Deploy to: /etc/systemd/system/mount-watchdog.service
+
+[Unit]
+Description=iPod-sync: verify /mnt/data is healthy, remount if it dropped
+After=local-fs.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/ipod-sync/config.env
+ExecStart=/usr/local/lib/ipod-sync/mount-watchdog.sh
+# Needs root to umount/mount:
+User=root
+SyslogIdentifier=mount-watchdog

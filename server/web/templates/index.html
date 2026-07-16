@@ -20,10 +20,27 @@
   <main>
     <!-- ── Activity Feed ──────────────────────────────────────────────── -->
     <section id="feed" class="card">
-      <h2>Activity Feed</h2>
+      <h2>Activity</h2>
+
+      <div class="feed-controls">
+        <select id="feed-source" onchange="refreshFeed()">
+          <option value="">All sources</option>
+          {% for s in sources %}
+          <option value="{{ s }}">{{ s }}</option>
+          {% endfor %}
+        </select>
+        <input
+          id="feed-search"
+          class="search"
+          type="search"
+          placeholder="Search events…"
+          oninput="refreshFeed()"
+        >
+      </div>
+
       <div
         hx-get="/feed"
-        hx-trigger="every 10s"
+        hx-trigger="load, every 10s"
         hx-swap="innerHTML"
         id="feed-content"
       >
@@ -108,6 +125,26 @@
   </main>
 
   <script>
+    // Keep the polling feed in sync with the source/search filters.
+    function feedUrl() {
+      const src = document.getElementById('feed-source').value;
+      const q   = document.getElementById('feed-search').value;
+      const p   = new URLSearchParams();
+      if (src) p.set('source', src);
+      if (q)   p.set('q', q);
+      const qs = p.toString();
+      return '/feed' + (qs ? '?' + qs : '');
+    }
+    function refreshFeed() {
+      const el = document.getElementById('feed-content');
+      el.setAttribute('hx-get', feedUrl());
+      htmx.ajax('GET', feedUrl(), { target: '#feed-content', swap: 'innerHTML' });
+    }
+    // Make the 10s poll respect the current filter too.
+    document.addEventListener('htmx:configRequest', (e) => {
+      if (e.detail.path === '/feed') e.detail.path = feedUrl();
+    });
+
     function filterAlbums(query) {
       const q = query.toLowerCase();
       document.querySelectorAll('.album-card').forEach(card => {

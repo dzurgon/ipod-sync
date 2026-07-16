@@ -1,4 +1,4 @@
-# udev rule: trigger iPod sync when Rockbox iPod Classic is connected via USB
+# udev rule: trigger iPod sync + log connect/disconnect for a Rockbox iPod Classic
 #
 # Deploy to: /etc/udev/rules.d/99-ipod-rockbox.rules
 #
@@ -10,8 +10,10 @@
 #   lsusb  →  look for "Apple, Inc. iPod"
 #   udevadm info --name=/dev/sdX --attribute-walk | grep -E 'idVendor|idProduct'
 #
-# Apple iPod Classic (all generations):  idVendor=05ac, idProduct=1261 (5th gen)
-# Adjust idProduct if yours differs — check with lsusb after connecting.
+# Apple iPod Classic: idVendor=05ac. idProduct varies by generation/mode — a
+# Rockbox iPod in disk mode commonly enumerates as 1209 (used below). If yours
+# differs (e.g. 1261 on some 5th-gen units), update ID_MODEL_ID in all rules.
+# Confirm with `lsusb | grep -i apple` after connecting.
 
 # ── Rule 1: Tag the block device when iPod is seen ───────────────────────────
 SUBSYSTEM=="block", \
@@ -19,10 +21,18 @@ SUBSYSTEM=="block", \
   ENV{ID_MODEL_ID}=="1209", \
   TAG+="ipod_rockbox"
 
-# ── Rule 2: On connect, run sync script as user jimin ─────────────────────────
-# Label check omitted — iPod is mounted at a fixed path (IPOD_MOUNT_PATH in config).
+# ── Rule 2: On connect, log the event, then run the sync ─────────────────────
 SUBSYSTEM=="block", \
   ENV{ID_VENDOR_ID}=="05ac", \
   ENV{ID_MODEL_ID}=="1209", \
   ACTION=="add", \
+  RUN+="/usr/local/lib/ipod-sync/ipod-event.sh add", \
   RUN+="/usr/local/lib/ipod-sync/udev-trigger.sh"
+
+# ── Rule 3: On disconnect, log the removal ───────────────────────────────────
+# On remove, USB attribute env vars aren't always populated, so match the tag
+# we set in Rule 1 instead of the vendor/model IDs.
+SUBSYSTEM=="block", \
+  ACTION=="remove", \
+  TAG=="ipod_rockbox", \
+  RUN+="/usr/local/lib/ipod-sync/ipod-event.sh remove"

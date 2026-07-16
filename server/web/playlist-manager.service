@@ -8,7 +8,8 @@
 
 [Unit]
 Description=iPod Playlist Manager web app
-After=network.target
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple
@@ -25,7 +26,7 @@ ExecStart=/usr/local/lib/ipod-sync/web/.venv/bin/uvicorn \
   --port 8337 \
   --workers 1
 
-Restart=on-failure
+Restart=always
 RestartSec=5
 
 StandardOutput=journal

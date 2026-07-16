@@ -48,6 +48,7 @@ fi
 # ── Copy to Nextcloud FLAC folder ─────────────────────────────────────────────
 # Use rsync so re-downloads or re-seeds don't cause issues.
 # We copy (not move) so the torrent can continue seeding from ~/Torrents/Music.
+# Cover art (*.jpg) is excluded because beets fetches clean art server-side.
 
 mkdir -p "$NEXTCLOUD_FLAC"
 
@@ -61,7 +62,7 @@ rsync \
   --exclude='*.nfo' \
   --exclude='*.txt' \
   --exclude='*.sfv' \
-  --exclude='*.jpg' \   # beets will fetch cover art; don't copy torrent junk art
+  --exclude='*.jpg' \
   --stats \
   "$TORRENT_PATH/" \
   "$NEXTCLOUD_FLAC/$TORRENT_NAME/" \

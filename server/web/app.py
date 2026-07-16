@@ -22,8 +22,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, Request, Form, HTTPException
-from fastapi.responses import HTMLResponse, RedirectResponse, FileResponse
+from fastapi import FastAPI, Request, Form, HTTPException, Header
+from fastapi.responses import HTMLResponse, RedirectResponse, FileResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -48,21 +48,68 @@ cfg = load_config(os.environ.get("CONFIG_FILE", "/etc/ipod-sync/config.env"))
 MUSIC_DIR    = Path(cfg.get("MUSIC_DIR",    "/mnt/data/media/music/FLAC"))
 PLAYLIST_DIR = Path(cfg.get("PLAYLIST_DIR", "/mnt/data/media/music/Playlists"))
 LOG_DIR      = Path(cfg.get("LOG_DIR",      "/var/log/ipod-sync"))
+EVENTS_LOG   = Path(cfg.get("EVENTS_LOG",   str(LOG_DIR / "events.jsonl")))
+DATA_MOUNT   = Path(cfg.get("DATA_MOUNT",   "/mnt/data"))
+EVENT_TOKEN  = cfg.get("EVENT_TOKEN", "") or os.environ.get("EVENT_TOKEN", "")
 
 PLAYLIST_DIR.mkdir(parents=True, exist_ok=True)
+EVENTS_LOG.parent.mkdir(parents=True, exist_ok=True)
 
-# ── Event feed (in-memory ring buffer) ────────────────────────────────────────
+# ── Structured event log (persistent JSONL) ───────────────────────────────────
+# One JSON object per line: {ts, source, kind, message, detail}
+# Written by this app AND by the shell scripts (via lib/common.sh emit_event) AND
+# by the Mac cd-sync.sh (via POST /events). We read the tail for display.
 
-MAX_FEED_EVENTS = 100
-_feed: list[dict] = []
+VALID_SOURCES = {"cd", "upload", "ipod", "sync", "beets", "playlist", "mount"}
+VALID_KINDS   = {"info", "success", "warning", "error"}
 
-def push_event(kind: str, message: str) -> None:
-    _feed.insert(0, {
-        "kind":    kind,           # "info" | "success" | "warning" | "error"
+
+def push_event(kind: str, message: str, source: str = "playlist", detail: str = "") -> None:
+    """Append a structured event to the JSONL log."""
+    rec = {
+        "ts":      int(datetime.now().timestamp()),
+        "source":  source if source in VALID_SOURCES else "playlist",
+        "kind":    kind if kind in VALID_KINDS else "info",
         "message": message,
-        "time":    datetime.now().strftime("%H:%M:%S"),
-    })
-    del _feed[MAX_FEED_EVENTS:]
+        "detail":  detail,
+    }
+    try:
+        with open(EVENTS_LOG, "a", encoding="utf-8") as f:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    except OSError:
+        pass
+
+
+def read_events(limit: int = 200, source: str = "", query: str = "") -> list[dict]:
+    """Read the tail of the event log, newest first, with optional source/text filter."""
+    if not EVENTS_LOG.exists():
+        return []
+    try:
+        # Read only the tail to stay fast as the log grows.
+        with open(EVENTS_LOG, encoding="utf-8", errors="replace") as f:
+            lines = f.readlines()[-5000:]
+    except OSError:
+        return []
+
+    q = query.lower().strip()
+    out: list[dict] = []
+    for line in reversed(lines):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rec = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if source and rec.get("source") != source:
+            continue
+        if q and q not in (rec.get("message", "") + " " + rec.get("detail", "")).lower():
+            continue
+        rec["time"] = datetime.fromtimestamp(rec.get("ts", 0)).strftime("%m-%d %H:%M:%S")
+        out.append(rec)
+        if len(out) >= limit:
+            break
+    return out
 
 
 # ── App setup ─────────────────────────────────────────────────────────────────
@@ -165,9 +212,24 @@ async def index(request: Request):
         "request":   request,
         "albums":    scan_library(),
         "playlists": scan_playlists(),
-        "feed":      _feed,
+        "feed":      read_events(limit=100),
+        "sources":   sorted(VALID_SOURCES),
         "logs":      read_recent_logs(),
     })
+
+
+# ── Health check ──────────────────────────────────────────────────────────────
+
+@app.get("/healthz", response_class=JSONResponse)
+async def healthz():
+    """Liveness + data-mount health (used by monitoring / uptime checks)."""
+    mount_ok = DATA_MOUNT.is_dir() and (DATA_MOUNT / ".mounted_ok").exists()
+    return {
+        "status":     "ok",
+        "music_dir":  MUSIC_DIR.exists(),
+        "mount_ok":   mount_ok,
+        "events_log": EVENTS_LOG.exists(),
+    }
 
 
 # ── Album detail ─────────────────────────────────────────────────────────────
@@ -290,14 +352,39 @@ async def delete_playlist(name: str):
     return RedirectResponse("/", status_code=303)
 
 
-# ── Feed partial (HTMX polling) ───────────────────────────────────────────────
+# ── Event feed (HTMX polling, filterable) ─────────────────────────────────────
 
 @app.get("/feed", response_class=HTMLResponse)
-async def feed_partial(request: Request):
+async def feed_partial(request: Request, source: str = "", q: str = ""):
+    """HTMX partial — the event list, optionally filtered by source and text."""
     return templates.TemplateResponse("_feed.html", {
         "request": request,
-        "feed":    _feed,
+        "feed":    read_events(limit=200, source=source, query=q),
     })
+
+
+# ── Event ingest (POST) — used by the Mac cd-sync.sh and any other producer ─────
+
+@app.post("/events")
+async def ingest_event(request: Request, x_event_token: str = Header(default="")):
+    """Append an event to the log. Body: {source, kind, message, detail?}.
+    If EVENT_TOKEN is configured, require it in the X-Event-Token header."""
+    if EVENT_TOKEN and x_event_token != EVENT_TOKEN:
+        raise HTTPException(401, "Invalid or missing event token.")
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(400, "Body must be JSON.")
+    message = str(body.get("message", "")).strip()
+    if not message:
+        raise HTTPException(400, "message is required.")
+    push_event(
+        kind=str(body.get("kind", "info")),
+        message=message,
+        source=str(body.get("source", "cd")),
+        detail=str(body.get("detail", "")),
+    )
+    return JSONResponse({"ok": True})
 
 
 # ── Log viewer ────────────────────────────────────────────────────────────────

@@ -294,11 +294,16 @@ immediately on the server — they'll reach the iPod on the next sync.
 
 ---
 
-## What Still Needs Fixing
+## Status (updated for v2)
 
-| Issue | Status | Fix |
-|-------|--------|-----|
-| udev auto-trigger on USB | Pending | Fix vfat mount ownership via fstab so `jimin` can write; then udev fires hands-free |
-| beets debounce timer | Pending | Variable scoping bug in watcher — beets events fire but flush doesn't always trigger |
-| Nextcloud → server path | Pending | Confirm Nextcloud data volume maps to `/mnt/data/media/music/FLAC` or add bridge |
-| Last.fm auth | Pending | Run `python3 /usr/local/lib/ipod-sync/scrobble.py --auth --config /etc/ipod-sync/config.env` once interactively |
+| Issue | Status | Notes |
+|-------|--------|-------|
+| beets debounce timer | **Fixed** | Rewrote `music-watcher.sh` as a single-process loop (`read -t`); the old reader/timer subshell split (separate variable copies) is gone. |
+| udev trigger ran as wrong user | **Fixed** | `udev-trigger.sh` now reads `SYNC_USER` from config (defaults `jimin`), not the hard-coded `ben`. |
+| iPod plug/unplug not visible | **Fixed** | udev now logs connect **and** disconnect via `ipod-event.sh` → shows in the web UI. |
+| `/mnt/data` I/O error wrecking syncs | **Fixed** | `require_healthy_mount` guard + `.mounted_ok` sentinel + `--max-delete` cap + `mount-watchdog.timer`. See v2 design doc §7. |
+| CD → server → iPod flow | **Added** | `mac/cd-sync.sh` + launchd agent; converges on the beets watcher. |
+| `config.env.example` missing | **Fixed** | Added at repo root with all variables. |
+| udev auto-trigger on USB | Verify on hardware | Should now fire hands-free; confirm the iPod's `ID_MODEL_ID` matches the rule (`lsusb`). |
+| Nextcloud → server path | Pending | Confirm Nextcloud data volume maps to `/mnt/data/media/music/FLAC` or add bridge. |
+| Last.fm auth | Pending | Run `scrobble.py --auth --config /etc/ipod-sync/config.env` once interactively. |

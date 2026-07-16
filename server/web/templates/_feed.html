@@ -3,10 +3,14 @@
   {% for event in feed %}
   <li class="feed-item feed-{{ event.kind }}">
     <span class="feed-time">{{ event.time }}</span>
-    <span class="feed-msg">{{ event.message }}</span>
+    <span class="feed-source src-{{ event.source }}">{{ event.source }}</span>
+    <span class="feed-msg">
+      {{ event.message }}
+      {% if event.detail %}<span class="feed-detail">{{ event.detail }}</span>{% endif %}
+    </span>
   </li>
   {% endfor %}
 </ul>
 {% else %}
-<p class="empty">No activity yet. Events will appear here after an iPod sync.</p>
+<p class="empty">No matching activity yet. Events appear here as CDs import, files upload, and the iPod is plugged in.</p>
 {% endif %}

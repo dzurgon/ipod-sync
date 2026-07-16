@@ -5,15 +5,22 @@
 # Deploy to: /usr/local/lib/ipod-sync/udev-trigger.sh
 # Must be executable and owned by root.
 
-# Wait a moment for the filesystem to settle after the block device appears
+# Wait a moment for the filesystem to settle after the block device appears.
 sleep 3
 
-# Run the real sync script as user 'ben' with a full login environment.
-# systemd-run ensures it gets a proper environment, cgroup, and journal logging.
+# Resolve the sync user from config (falls back to jimin). udev runs with almost
+# no environment, so we read the value directly rather than sourcing the whole file.
+CONFIG_FILE="/etc/ipod-sync/config.env"
+SYNC_USER="$(sed -n 's/^SYNC_USER=//p' "$CONFIG_FILE" 2>/dev/null | tr -d '\"'\''' | head -n1)"
+SYNC_USER="${SYNC_USER:-jimin}"
+
+# Run the real sync script as the regular user with a full environment.
+# systemd-run gives it a proper environment, cgroup, and journal logging.
 /usr/bin/systemd-run \
   --unit=ipod-sync \
-  --uid=ben \
-  --gid=ben \
+  --uid="$SYNC_USER" \
+  --gid="$SYNC_USER" \
+  --setenv=CONFIG_FILE="$CONFIG_FILE" \
   --pipe \
   --collect \
   /usr/local/lib/ipod-sync/ipod-sync.sh

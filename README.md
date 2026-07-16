@@ -21,11 +21,17 @@ vim /
 
 | Trigger | Action |
 |---------|--------|
+| **CD ripped in Apple Music (Mac)** | **launchd watch → rsync-over-SSH pushes rip to server → beets → iPod** |
 | New music lands on server | beets auto-tags, renames folders, fetches cover art |
 | iPod plugged into server via USB | Music synced from server → iPod |
+| iPod plugged / unplugged | Connect + disconnect logged as events, visible in the web UI |
 | iPod plugged in | Playlists synced (bidirectional) |
 | iPod plugged in | `.scrobbler.log` submitted to Last.fm, marked to prevent re-submission |
 | Mac qBittorrent finishes a "Music" download | Files copied to Nextcloud → server pipeline picks them up |
+| `/mnt/data` drive drops off the bus | Watchdog remounts it and logs a warning; syncs refuse to run on a broken mount |
+
+> **Design & rationale:** see [docs/v2-cd-flow-design.md](docs/v2-cd-flow-design.md) for the
+> CD-flow architecture, the audio-format decision, and the `/mnt/data` I/O-error fix.
 
 ---
 
@@ -33,17 +39,26 @@ vim /
 
 ```
 NUC (Ubuntu)                        Mac
-├── beets          auto-tagger       └── Nextcloud desktop client
-├── inotifywait    file watcher          ~/Nextcloud/FLAC  ←→  server
-├── udev           iPod detection    └── qBittorrent
-├── systemd        service manager       torrent-finish.sh hook
-├── FastAPI+HTMX   playlist manager
+├── beets          auto-tagger       ├── Apple Music        CD ripping
+├── inotifywait    file watcher      │     Media/…/Music  ──rsync/ssh──▶ server
+├── udev           iPod detect+log   ├── launchd            cd-sync.sh (WatchPaths)
+├── systemd        service manager   ├── Nextcloud client   ~/Nextcloud/FLAC ↔ server
+├── FastAPI+HTMX   web UI + events   └── qBittorrent        torrent-finish.sh hook
+├── mount-watchdog /mnt/data health
 └── python3        Last.fm scrobbler
 
 iPod Classic (Rockbox)
-├── FLAC/          music library
+├── FLAC/          music library (also holds .m4a AAC from CDs)
 ├── Playlists/     .m3u files
 └── .scrobbler.log play history
+```
+
+**Ingest paths (all converge on the beets watcher):**
+```
+CD      → Apple Music → cd-sync.sh (launchd) → rsync/ssh → /mnt/data/media/music/FLAC
+torrent → qBittorrent → torrent-finish.sh → Nextcloud → /mnt/data/media/music/FLAC
+                                                 ↓ inotify
+                                          beets → cover art → iPod on next plug-in
 ```
 
 ---
@@ -56,28 +71,37 @@ ipod-sync/
 │
 ├── server/
 │   ├── udev/
-│   │   └── 99-ipod-rockbox.rules     udev rule: fires on iPod USB connect
+│   │   └── 99-ipod-rockbox.rules     udev: iPod add (sync+log) and remove (log)
 │   ├── scripts/
-│   │   ├── udev-trigger.sh           thin root→user bridge via systemd-run
-│   │   ├── ipod-sync.sh              main sync script (mount → rsync → playlists → scrobble)
+│   │   ├── lib/common.sh             shared: log helpers, emit_event, require_healthy_mount
+│   │   ├── udev-trigger.sh           thin root→user bridge via systemd-run (uses SYNC_USER)
+│   │   ├── ipod-sync.sh              main sync (mount-guard → rsync → playlists → scrobble)
+│   │   ├── ipod-event.sh             logs iPod connect/disconnect as events
+│   │   ├── mount-watchdog.sh         /mnt/data health check + auto-remount
+│   │   ├── mount-watchdog.service    oneshot unit for the watchdog
+│   │   ├── mount-watchdog.timer      runs the watchdog every 3 min
 │   │   └── scrobble.py               Last.fm scrobbler (parses Rockbox log format)
 │   ├── beets/
 │   │   └── config.yaml               fully silent auto-tagger config
 │   ├── watcher/
-│   │   ├── music-watcher.sh          inotifywait loop → beets → Nextcloud rescan
+│   │   ├── music-watcher.sh          inotify → (single-process debounce) → beets → rescan
 │   │   └── music-watcher.service     systemd unit
 │   └── web/
-│       ├── app.py                    FastAPI playlist manager (port 8337)
+│       ├── app.py                    FastAPI web UI + /events, /feed, /healthz (port 8337)
 │       ├── requirements.txt
-│       ├── playlist-manager.service  systemd unit
+│       ├── playlist-manager.service  systemd unit (Restart=always)
 │       ├── static/style.css
-│       └── templates/                HTMX-powered UI
+│       └── templates/                HTMX-powered UI (filterable event feed)
 │
 ├── mac/
-│   └── torrent-finish.sh             qBittorrent post-download hook (Path A)
+│   ├── torrent-finish.sh             qBittorrent post-download hook (torrent path)
+│   ├── cd-sync.sh                    CD path: debounced rsync/ssh push + POST /events
+│   └── com.ben.cd-sync.plist         launchd WatchPaths agent for cd-sync.sh
 │
 └── docs/
-    └── setup.md                      step-by-step install guide
+    ├── setup.md                      step-by-step install guide
+    ├── workflow.md                   how each component works, step by step
+    └── v2-cd-flow-design.md          CD-flow architecture + mount-hardening design
 ```
 
 ---
@@ -197,10 +221,13 @@ The Last.fm session key is stored in `~/.config/ipod-sync/lastfm-session` (mode 
 
 | Component | Log |
 |-----------|-----|
+| **Structured events (web UI)** | `/var/log/ipod-sync/events.jsonl` — all sources; browse/filter at `:8337` |
 | iPod sync | `/var/log/ipod-sync/ipod-sync-YYYYMMDD-HHMMSS.log` |
 | beets | `/var/log/ipod-sync/beets-import.log` |
 | Music watcher | `/var/log/ipod-sync/watcher.log` · `journalctl -u music-watcher` |
+| Mount watchdog | `/var/log/ipod-sync/mount-watchdog.log` · `journalctl -u mount-watchdog` |
 | Playlist manager | `journalctl -u playlist-manager` |
+| Mac CD sync | `~/Library/Logs/ipod-sync/cd-sync.log` |
 | Mac torrent hook | `~/Library/Logs/ipod-sync/torrent-finish.log` |
 
 ---
