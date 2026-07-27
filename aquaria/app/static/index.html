@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Aquaria Music Manager</title>
+<style>
+  :root{
+    --backdrop: linear-gradient(160deg,#012a36 0%,#034e5c 38%,#0a7c86 72%,#3fd0c9 100%);
+    --glass: rgba(255,255,255,.08);
+    --glass-strong: rgba(255,255,255,.14);
+    --line: rgba(180,255,247,.16);
+    --aqua: #6ff2e4;
+    --aqua-dim: #7fd8cf;
+    --ink: #eafffb;
+    --ink-dim: #9fc4c0;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0;min-height:100vh;color:var(--ink);
+    font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+    background:var(--backdrop) fixed;
+  }
+  .wrap{max-width:1180px;margin:0 auto;padding:26px 22px 120px}
+  h1{font-weight:700;letter-spacing:.3px;margin:0 0 2px;font-size:26px;
+     text-shadow:0 2px 18px rgba(0,0,0,.35)}
+  .sub{color:var(--ink-dim);font-size:13px;margin-bottom:22px}
+
+  /* Users row */
+  .users{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:20px}
+  .user{background:var(--glass);border:1px solid var(--line);border-radius:16px;
+        padding:12px 16px;min-width:150px;cursor:pointer;transition:.18s;backdrop-filter:blur(8px)}
+  .user:hover{background:var(--glass-strong);transform:translateY(-2px)}
+  .user.active{border-color:var(--aqua);box-shadow:0 0 0 1px var(--aqua),0 8px 30px rgba(111,242,228,.18)}
+  .user .name{font-weight:600}
+  .user .ipods{font-size:11px;color:var(--ink-dim);margin-top:3px}
+  .user .dot{display:inline-block;width:7px;height:7px;border-radius:50%;
+             background:var(--aqua);margin-right:5px;box-shadow:0 0 8px var(--aqua);
+             animation:pulse 1.8s infinite}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+
+  /* Tabs */
+  .tabs{display:flex;gap:6px;margin-bottom:18px;flex-wrap:wrap}
+  .tab{padding:8px 16px;border-radius:20px;cursor:pointer;font-size:13px;
+       border:1px solid var(--line);background:var(--glass);color:var(--ink-dim);transition:.15s}
+  .tab:hover{color:var(--ink)}
+  .tab.active{background:var(--aqua);color:#012129;font-weight:600;border-color:var(--aqua)}
+
+  .panel{background:var(--glass);border:1px solid var(--line);border-radius:20px;
+         padding:20px;backdrop-filter:blur(10px);min-height:220px}
+
+  /* Library toggle */
+  .seg{display:inline-flex;background:rgba(0,0,0,.22);border-radius:14px;padding:4px;margin-bottom:18px;gap:2px}
+  .seg button{border:0;background:transparent;color:var(--ink-dim);padding:7px 14px;border-radius:11px;
+              cursor:pointer;font-size:13px;transition:.15s}
+  .seg button.on{background:var(--aqua);color:#012129;font-weight:600}
+
+  .genre-h{font-size:12px;letter-spacing:1.5px;text-transform:uppercase;color:var(--aqua-dim);
+           margin:22px 0 12px;border-bottom:1px solid var(--line);padding-bottom:6px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:16px}
+
+  .tile{cursor:pointer;transition:.16s}
+  .tile:hover{transform:translateY(-3px)}
+  .thumb{width:100%;aspect-ratio:1;border-radius:14px;background:
+         linear-gradient(145deg,#0b5b63,#0a3b45);display:flex;align-items:center;justify-content:center;
+         font-size:34px;border:1px solid var(--line);overflow:hidden}
+  .thumb.round{border-radius:50%}
+  .thumb img{width:100%;height:100%;object-fit:cover}
+  .t-name{margin-top:8px;font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .t-meta{font-size:11px;color:var(--ink-dim)}
+  .t-genre{font-size:10px;color:var(--aqua-dim);letter-spacing:.4px}
+
+  /* All-albums list mode */
+  .list .row{display:flex;justify-content:space-between;align-items:center;padding:10px 12px;
+             border-bottom:1px solid var(--line);border-radius:8px}
+  .list .row:hover{background:var(--glass-strong)}
+  .list .row .r-genre{font-size:11px;color:var(--aqua-dim)}
+
+  .empty{color:var(--ink-dim);text-align:center;padding:40px}
+
+  /* Floating "currently adding" search */
+  .fab{position:fixed;left:22px;bottom:22px;z-index:20}
+  .fab .bubble{background:var(--aqua);color:#012129;border-radius:26px;padding:12px 16px;font-weight:600;
+               box-shadow:0 10px 30px rgba(0,0,0,.4);cursor:pointer;display:flex;align-items:center;gap:8px}
+  .fab .search{display:none;margin-top:10px;background:#022b33;border:1px solid var(--aqua);
+               border-radius:16px;padding:12px;width:340px;box-shadow:0 16px 40px rgba(0,0,0,.5)}
+  .fab.open .search{display:block}
+  .fab input{width:100%;background:rgba(0,0,0,.3);border:1px solid var(--line);border-radius:10px;
+             color:var(--ink);padding:9px 11px;font-size:14px;outline:none}
+  .res{max-height:260px;overflow:auto;margin-top:8px}
+  .res .grp{font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--aqua-dim);margin:8px 2px 4px}
+  .res .item{padding:6px 8px;border-radius:8px;cursor:pointer;font-size:13px}
+  .res .item:hover{background:var(--glass-strong)}
+  .res .item small{color:var(--ink-dim)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Aquaria Music Manager</h1>
+  <div class="sub" id="stats">loading library…</div>
+
+  <div class="users" id="users"></div>
+
+  <div class="tabs">
+    <div class="tab" data-tab="activity">Activity</div>
+    <div class="tab" data-tab="ipod">My iPod</div>
+    <div class="tab" data-tab="playlists">Playlists</div>
+    <div class="tab active" data-tab="library">Library</div>
+  </div>
+
+  <div class="panel" id="panel"></div>
+</div>
+
+<!-- currently-adding search -->
+<div class="fab" id="fab">
+  <div class="search">
+    <input id="q" placeholder="Search songs, albums, artists…" autocomplete="off">
+    <div class="res" id="res"></div>
+  </div>
+  <div class="bubble" id="fabBtn">✏️ <span id="fabLabel">Editing</span> · 🔍</div>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+let VIEW = "artist";
+
+async function api(path){ const r = await fetch(path); return r.json(); }
+
+async function loadStats(){
+  const s = await api("/api/stats");
+  $("#stats").textContent =
+    `${s.tracks} tracks · ${s.albums} albums · ${s.artists} artists · ${s.genres} genres`;
+}
+
+async function loadUsers(){
+  const {users} = await api("/api/users");
+  const el = $("#users");
+  if(!users.length){ el.innerHTML = `<div class="user"><div class="name">No users yet</div>
+    <div class="ipods">create one via POST /api/users?username=…</div></div>`; return; }
+  el.innerHTML = users.map((u,i)=>`
+    <div class="user ${i===0?'active':''}">
+      <div class="name">${u.username}</div>
+      <div class="ipods">${u.ipods.length
+        ? u.ipods.map(p=>`<span class="dot"></span>${p.name}`).join(" &nbsp; ")
+        : "no iPods linked"}</div>
+    </div>`).join("");
+}
+
+const icon = t => t==='head' ? '👤' : '💿';
+
+function tile(a){
+  const round = a.icon==='head' ? 'round':'';
+  const img = a.image ? `<img src="/media/${encodeURI(a.image)}">` : icon(a.icon||'album');
+  const meta = a.icon==='head'
+     ? `${a.n_albums} albums`
+     : `${a.n_tracks} tracks${a.year? ' · '+a.year:''}`;
+  return `<div class="tile">
+      <div class="thumb ${round}">${img}</div>
+      <div class="t-name">${a.artist && a.icon!=='head' ? '' : ''}${a.name||a.album||a.artist}</div>
+      <div class="t-meta">${meta}</div>
+      ${a.genre?`<div class="t-genre">${a.genre}</div>`:''}
+    </div>`;
+}
+
+async function renderLibrary(){
+  const panel = $("#panel");
+  panel.innerHTML = `<div class="seg">
+      <button data-v="genre">0_Genre</button>
+      <button data-v="artist">Artist &/or Album</button>
+      <button data-v="all_albums">All Albums</button>
+    </div><div id="libbody"></div>`;
+  panel.querySelectorAll(".seg button").forEach(b=>{
+    if(b.dataset.v===VIEW) b.classList.add("on");
+    b.onclick=()=>{ VIEW=b.dataset.v; renderLibrary(); };
+  });
+  const body = $("#libbody");
+  const {items} = await api("/api/library?view="+VIEW);
+  if(!items.length){ body.innerHTML=`<div class="empty">Library empty — run a scan (POST /api/scan)</div>`; return; }
+
+  if(VIEW==="genre"){
+    body.innerHTML = items.map(g=>`
+      <div class="genre-h">${g.genre} · ${g.n_albums} albums</div>
+      <div class="grid">${g.albums.map(a=>tile({...a,name:a.album,icon:'album'})).join("")}</div>
+    `).join("");
+  } else if(VIEW==="artist"){
+    body.innerHTML = `<div class="grid">${items.map(a=>tile({
+        artist:a.artist,name:a.artist,icon:'head',image:a.image,
+        n_albums:a.n_albums})).join("")}</div>`;
+  } else { // all_albums = list
+    body.innerHTML = `<div class="list">${items.map(a=>`
+      <div class="row">
+        <div>${a.display_all_albums}</div>
+        <div class="r-genre">${a.genre||''} · ${a.n_tracks} trk</div>
+      </div>`).join("")}</div>`;
+  }
+}
+
+function renderStub(name){
+  $("#panel").innerHTML = `<div class="empty">“${name}” module — scaffolded in the backend,
+    UI arrives in the next iteration.</div>`;
+}
+
+document.querySelectorAll(".tab").forEach(t=>t.onclick=()=>{
+  document.querySelectorAll(".tab").forEach(x=>x.classList.remove("active"));
+  t.classList.add("active");
+  const k=t.dataset.tab;
+  if(k==="library") renderLibrary(); else renderStub(t.textContent);
+});
+
+// currently-adding search
+$("#fabBtn").onclick=()=>$("#fab").classList.toggle("open");
+let timer;
+$("#q").oninput=e=>{
+  clearTimeout(timer);
+  timer=setTimeout(async()=>{
+    const q=e.target.value.trim();
+    if(!q){$("#res").innerHTML="";return;}
+    const r=await api("/api/search?q="+encodeURIComponent(q));
+    const sec=(label,arr,fmt)=>arr.length?`<div class="grp">${label}</div>`+
+      arr.map(fmt).join(""):"";
+    $("#res").innerHTML =
+      sec("Artists",r.artists,a=>`<div class="item">👤 ${a.artist}</div>`)+
+      sec("Albums",r.albums,a=>`<div class="item">💿 ${a.artist} — ${a.album}${a.year?' ('+a.year+')':''}</div>`)+
+      sec("Tracks",r.tracks,t=>`<div class="item">🎵 ${t.title} <small>· ${t.artist}</small></div>`);
+  },180);
+};
+
+loadStats(); loadUsers(); renderLibrary();
+</script>
+</body>
+</html>

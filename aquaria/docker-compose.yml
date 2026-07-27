@@ -1,0 +1,24 @@
+services:
+  aquaria:
+    build: .
+    container_name: aquaria
+    ports:
+      - "8337:8337"
+    volumes:
+      # Music library — read-only; Aquaria never mutates your files on disk.
+      - /mnt/data/media/music/FLAC:/mnt/data/media/music/FLAC:ro
+      # Playlists live outside the FLAC tree and ARE written by Aquaria.
+      - /mnt/data/media/music/Playlists:/mnt/data/media/music/Playlists
+      # Persistent index DB + app state.
+      - aquaria-data:/data
+    environment:
+      AQUARIA_MUSIC_ROOT: /mnt/data/media/music/FLAC
+      AQUARIA_DB: /data/aquaria.db
+    restart: unless-stopped
+    # iPod access (libgpod/udev) is added in a later iteration; it needs
+    # privileged USB passthrough:
+    #   devices: ["/dev/bus/usb:/dev/bus/usb"]
+    #   privileged: true
+
+volumes:
+  aquaria-data:
