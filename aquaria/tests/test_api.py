@@ -171,3 +171,29 @@ def test_genre_folders_indexed_and_fetched(client, monkeypatch):
     g = {x["rel_dir"]: x for x in client.get("/api/folder-art").json()["genres"]}
     assert g["0_POP"]["image"] == "0_POP/0_POP.jpg"
     assert client.get("/api/stats").json()["tracks"] == 14
+
+
+def test_album_cover_upload_becomes_baseline_jpeg(client):
+    from PIL import Image
+    lib = Path(client.get("/healthz").json()["music_root"])
+    album = "0_POP/Charli XCX/BRAT (2025)"
+    (lib / album / "cover.png").write_bytes(PNG)              # an older cover in another format
+    buf = io.BytesIO()
+    Image.new("RGBA", (2000, 1500), (138, 206, 0, 255)).save(buf, "PNG")
+
+    r = client.post("/api/folder-art/upload", data={"rel_dir": album},
+                    files={"file": ("brat.png", buf.getvalue(), "image/png")})
+    assert r.json()["image"] == f"{album}/cover.jpg"
+    covers = sorted(p.name for p in (lib / album).iterdir() if p.name.startswith("cover"))
+    assert covers == ["cover.jpg"]
+    img = Image.open(lib / album / "cover.jpg")
+    assert img.format == "JPEG" and img.size == (1000, 750) and not img.info.get("progressive")
+    assert client.get("/art/" + album).content == (lib / album / "cover.jpg").read_bytes()
+
+    # artist-less album folders count as albums too; folders above albums are not albums
+    r = client.post("/api/folder-art/upload", data={"rel_dir": "0_POP/Passion Pit - Gossamer (2013)"},
+                    files={"file": ("x.jpg", buf.getvalue(), "image/png")})
+    assert r.status_code == 200
+    assert client.post("/api/folder-art/fetch", json={"rel_dir": album}).status_code == 400
+    assert client.post("/api/folder-art/upload", data={"rel_dir": "0_POP/Charli"},
+                       files={"file": ("x.png", PNG, "image/png")}).status_code == 404

@@ -24,7 +24,9 @@ for the full design; this is the quick start.
   from Deezer's artist search (exact-name matches only); genres from Deezer's genre
   art by name, or per `AQUARIA_GENRE_ART` (`config.py`: e.g. `KWUR` → its Wikipedia
   logo). Fetch one, fetch all missing, or upload by hand from the folder's page.
-- `tests/` — 29 tests (parser edge cases, engine, playlist + download API).
+- Album covers: "Upload cover" on any album page writes `cover.jpg` into the album
+  folder (converted to a baseline JPEG ≤1000px so Rockbox can show it).
+- `tests/` — 30 tests (parser edge cases, engine, playlist + download API).
 
 ## Run locally (dev)
 
@@ -53,8 +55,8 @@ cd ~/docker/aquaria && docker compose up -d --build
 # http://100.94.158.95:8337  — indexes the library automatically on start
 ```
 
-FLAC is bind-mounted read-write, but the only thing Aquaria writes there is folder
-artwork (`<Folder>/<Folder>.jpg`); audio and album folders are never touched.
+FLAC is bind-mounted read-write, but the only thing Aquaria writes there is artwork
+(`<Folder>/<Folder>.jpg`, album `cover.jpg`); audio and album folders are never touched.
 `Playlists/` is read-write. Deleted playlists are
 renamed to `*.m3u.deleted`, never unlinked.
 

@@ -306,7 +306,7 @@ function tile(a, attrs){
     </div>`;
 }
 const albumTile = (a, sub) => tile({name:a.album, sub, n_tracks:a.n_tracks, year:a.year,
-  icon:'album', image:"/art/"+enc(a.folder)}, `data-folder="${esc(a.folder)}"`);
+  icon:'album', image:"/art/"+enc(a.folder)+"?v="+IMGV}, `data-folder="${esc(a.folder)}"`);
 
 function wireFolders(root, back){
   root.querySelectorAll("[data-folder]").forEach(el=>el.onclick=()=>{ BACK = back; renderAlbum(el.dataset.folder); });
@@ -489,7 +489,7 @@ async function renderAlbum(folder){
   const tracks = al.tracks;
   $("#panel").innerHTML = `<div class="crumb" id="back">← Library</div>
     <div class="head">
-      <div class="thumb"><img src="/art/${enc(folder)}" onerror="this.replaceWith('💿')"></div>
+      <div class="thumb"><img src="/art/${enc(folder)}?v=${IMGV}" onerror="this.replaceWith('💿')"></div>
       <div class="info">
         <h2>${esc(al.album)}${yr(al.year)}</h2>
         <div class="sub" style="margin:0">${esc(al.artist)}${al.genre?' · '+esc(al.genre):''} · ${tracks.length} tracks</div>
@@ -497,6 +497,7 @@ async function renderAlbum(folder){
           <button class="btn primary" id="playAll">▶ Play</button>
           <a class="btn" href="/download/album?folder=${encodeURIComponent(folder)}">⬇ Download album (.zip)</a>
           <button class="btn" data-add id="addAll">＋ Add to playlist</button>
+          <label class="btn" title="Saved as cover.jpg in the album folder">⬆ Upload cover<input type="file" id="coverUpload" accept="image/jpeg,image/png,image/webp" hidden></label>
         </div>
       </div>
     </div>
@@ -513,6 +514,14 @@ async function renderAlbum(folder){
   $("#back").onclick = BACK || renderLibrary;
   $("#playAll").onclick = ()=>play(tracks, 0);
   $("#addAll").onclick = e=>{ e.stopPropagation(); showAddPop(e.currentTarget, {folder}); };
+  $("#coverUpload").onchange = async e=>{
+    const f = e.target.files[0]; if(!f) return;
+    const fd = new FormData(); fd.append("rel_dir", folder); fd.append("file", f);
+    try {
+      await api("/api/folder-art/upload", {method:"POST", body:fd});
+      IMGV = Date.now(); toast("Cover saved"); renderAlbum(folder);
+    } catch(err){ toast(err.message); }
+  };
   document.querySelectorAll("[data-play]").forEach(b=>b.onclick=()=>play(tracks, +b.dataset.play));
   document.querySelectorAll(".row [data-add]").forEach(b=>b.onclick=e=>{
     e.stopPropagation(); showAddPop(b, {rel_paths:[tracks[+b.dataset.add].rel_path]}); });

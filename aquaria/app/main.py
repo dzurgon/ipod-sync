@@ -120,7 +120,7 @@ def media(rel_path: str):
 @app.get("/art/{folder:path}")
 def art(folder: str):
     d = (config.MUSIC_ROOT / folder).resolve()
-    for name in ("cover.jpg", "cover.png", "folder.jpg", "cover.jpeg"):
+    for name in ("cover.jpg", "cover.png", "cover.jpeg", "cover.webp", "folder.jpg"):
         p = d / name
         if p.is_file():
             return FileResponse(p)
@@ -302,6 +302,8 @@ def folder_art_list():
 
 @app.post("/api/folder-art/fetch")
 def folder_art_fetch(body: FolderRef):
+    if (folder_art.kind_of(conn, body.rel_dir) or ("",))[0] == "album":
+        raise HTTPException(400, "album covers come from beets (fetchart) — upload one instead")
     try:
         with write_lock:
             img = folder_art.fetch_one(conn, config.MUSIC_ROOT, body.rel_dir)
@@ -326,17 +328,22 @@ def folder_art_fetch_status():
 
 @app.post("/api/folder-art/upload")
 async def folder_art_upload(rel_dir: str = Form(...), file: UploadFile = File(...)):
+    """Genre/artist folders -> <Folder>/<Folder>.<ext>; album folders -> cover.jpg."""
     data = await file.read(folder_art.MAX_BYTES + 1)
-    if not folder_art.kind_of(conn, rel_dir):
-        raise HTTPException(404, "not a genre or artist folder")
+    found = folder_art.kind_of(conn, rel_dir)
+    if not found:
+        raise HTTPException(404, "not a genre, artist or album folder")
     try:
         with write_lock:
-            folder_art.save_image(config.MUSIC_ROOT, rel_dir, data)
-            img = folder_art.record(conn, config.MUSIC_ROOT, rel_dir)
+            if found[0] == "album":
+                img = folder_art.save_cover(config.MUSIC_ROOT, rel_dir, data)
+            else:
+                folder_art.save_image(config.MUSIC_ROOT, rel_dir, data)
+                img = folder_art.record(conn, config.MUSIC_ROOT, rel_dir)
     except ValueError as e:
         raise HTTPException(400, str(e))
     except FileNotFoundError:
-        raise HTTPException(404, "not a genre or artist folder")
+        raise HTTPException(404, "not a genre, artist or album folder")
     return {"image": img}
 
 

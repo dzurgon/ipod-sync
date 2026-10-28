@@ -7,8 +7,9 @@ Convention: a folder's picture sits inside it and is named after it:
     0_POP/Charli XCX/Charli XCX.jpg    artist photo
 
 so it travels with the library (Nextcloud, rsync, backups) and any tool can find
-it. (Album folders keep beets' cover.jpg.) Pictures come from online sources or a
-manual upload:
+it. Album folders keep beets' cover.jpg instead (uploads are converted to a
+baseline JPEG, which is what Rockbox can display). Pictures come from online
+sources or a manual upload:
 
   * artists — Deezer's public artist search (no key needed), exact-name matches
     only, so an ambiguous artist gets no photo rather than the wrong one.
@@ -18,12 +19,15 @@ manual upload:
 
 from __future__ import annotations
 
+import io
 import json
 import threading
 import time
 import urllib.parse
 import urllib.request
 from pathlib import Path
+
+from PIL import Image
 
 from . import config
 from .indexer import IMAGE_EXTS, find_folder_image, norm_key
@@ -93,12 +97,46 @@ def genre_lookup(genre: str) -> str | None:
 
 
 def kind_of(conn, rel_dir: str) -> tuple[str, str] | None:
-    """('artist'|'genre', display name) for a known folder, else None."""
+    """('artist'|'genre'|'album', display name) for a known folder, else None."""
     for kind, (table, col) in KINDS.items():
         row = conn.execute(f"SELECT {col} AS name FROM {table} WHERE rel_dir=?", (rel_dir,)).fetchone()
         if row:
             return kind, row["name"]
-    return None
+    # An album folder is one with tracks directly inside it.
+    row = conn.execute(
+        "SELECT album FROM tracks WHERE substr(rel_path, 1, length(?1) + 1) = ?1 || '/' "
+        "AND instr(substr(rel_path, length(?1) + 2), '/') = 0 LIMIT 1", (rel_dir,)).fetchone()
+    return ("album", row["album"]) if row else None
+
+
+COVER_NAMES = ("cover.jpg", "cover.jpeg", "cover.png", "cover.webp")
+COVER_MAX_PX = 1000
+
+
+def save_cover(music_root: Path, rel_dir: str, data: bytes) -> str:
+    """Write <album>/cover.jpg as a baseline JPEG (<= 1000px), replacing any other cover.*."""
+    if len(data) > MAX_BYTES:
+        raise ValueError("image is larger than 15 MB")
+    if not sniff_ext(data):
+        raise ValueError("not a JPEG, PNG or WebP image")
+    root = music_root.resolve()
+    folder = (root / rel_dir).resolve()
+    if root not in folder.parents or not folder.is_dir():
+        raise FileNotFoundError(rel_dir)
+    try:
+        img = Image.open(io.BytesIO(data))
+        img.thumbnail((COVER_MAX_PX, COVER_MAX_PX))
+        out = io.BytesIO()
+        img.convert("RGB").save(out, "JPEG", quality=90, progressive=False)
+    except Exception as e:
+        raise ValueError(f"could not read image: {e}")
+    for old in folder.iterdir():
+        if old.name.lower() in COVER_NAMES:
+            old.unlink()
+    tmp = folder / ".cover.jpg.tmp"
+    tmp.write_bytes(out.getvalue())
+    tmp.replace(folder / "cover.jpg")
+    return (folder / "cover.jpg").relative_to(root).as_posix()
 
 
 def save_image(music_root: Path, rel_dir: str, data: bytes) -> str:
