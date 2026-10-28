@@ -56,7 +56,7 @@ cd ~/docker/aquaria && docker compose up -d --build
 ```
 
 FLAC is bind-mounted read-write, but the only thing Aquaria writes there is artwork
-(`<Folder>/<Folder>.jpg`, album `cover.jpg`); audio and album folders are never touched.
+(`<Folder>/<Folder>.jpg`, album `cover.jpg`); audio files are never touched.
 `Playlists/` is read-write. Deleted playlists are
 renamed to `*.m3u.deleted`, never unlinked.
 
