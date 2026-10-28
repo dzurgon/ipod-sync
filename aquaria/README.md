@@ -18,7 +18,11 @@ for the full design; this is the quick start.
 - Playlists: create / add (from album pages or the search bubble) / reorder /
   remove / delete. Mirrored to `Playlists/*.m3u` so `ipod-sync.sh` still pushes
   them; `.m3u` files edited elsewhere are re-imported on the next scan.
-- `tests/` — 24 tests (parser edge cases, engine, playlist + download API).
+- Artist photos: stored in the tree as `<artist folder>/<artist folder name>.jpg`
+  (e.g. `0_POP/Charli XCX/Charli XCX.jpg`; `.png`/`.webp` and legacy `artist.*`
+  also read). Fetched from Deezer's public API (exact-name matches only) one at
+  a time or in bulk from the Artist view, or uploaded by hand from any artist page.
+- `tests/` — 28 tests (parser edge cases, engine, playlist + download API).
 
 ## Run locally (dev)
 
@@ -47,7 +51,9 @@ cd ~/docker/aquaria && docker compose up -d --build
 # http://100.94.158.95:8337  — indexes the library automatically on start
 ```
 
-FLAC is bind-mounted read-only; `Playlists/` read-write. Deleted playlists are
+FLAC is bind-mounted read-write, but the only thing Aquaria writes there is artist
+photos (`<Artist>/<Artist>.jpg`); audio and album folders are never touched.
+`Playlists/` is read-write. Deleted playlists are
 renamed to `*.m3u.deleted`, never unlinked.
 
 ## Key endpoints
@@ -62,4 +68,5 @@ renamed to `*.m3u.deleted`, never unlinked.
 | `GET /media/<rel_path>` · `GET /art/<folder>` | stream audio / cover art |
 | `GET /download/track/<rel_path>` | download one file |
 | `GET /download/album?folder=…` · `GET /download/playlist/<id>` | download as `.zip` |
+| `GET /api/artist-folders` · `POST …/fetch` · `POST …/upload` · `POST …/fetch-missing` | artist photos |
 | `GET/POST /api/playlists` · `/api/playlists/<id>[/tracks\|/items/…]` | playlist CRUD |

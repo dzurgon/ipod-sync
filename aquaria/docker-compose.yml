@@ -19,7 +19,8 @@ services:
       TZ: ${TZ:-America/Chicago}
     volumes:
       - ./data:/data                                                    # SQLite index
-      - ${MUSIC_DIR:-/mnt/data/media/music/FLAC}:/mnt/data/media/music/FLAC:ro
+      # rw only so artist photos can be saved as <Artist>/<Artist>.jpg; audio is never written.
+      - ${MUSIC_DIR:-/mnt/data/media/music/FLAC}:/mnt/data/media/music/FLAC
       - ${PLAYLIST_DIR:-/mnt/data/media/music/Playlists}:/mnt/data/media/music/Playlists
     ports:
       - "0.0.0.0:8337:8337"   # Tailscale 100.94.158.95:8337, LAN 192.168.1.65:8337

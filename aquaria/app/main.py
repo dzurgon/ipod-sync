@@ -17,12 +17,12 @@ import zipfile
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import config, db, indexer, library, playlists
+from . import artist_images, config, db, indexer, library, playlists
 
 # Use the configured DB path when its directory exists (the /data volume in
 # Docker); otherwise fall back to a local file for dev runs outside a container.
@@ -281,6 +281,60 @@ def delete_playlist(playlist_id: int):
     with write_lock:
         playlists.delete_playlist(conn, playlist_id)
     return {"ok": True}
+
+
+# ── Artist photos ────────────────────────────────────────────────────────────
+# Stored in the tree as <artist folder>/<artist folder name>.<jpg|png|webp>.
+
+class ArtistDir(BaseModel):
+    rel_dir: str
+
+
+@app.get("/api/artist-folders")
+def artist_folders():
+    rows = conn.execute("SELECT rel_dir, artist_key, artist, image FROM artist_folders "
+                        "ORDER BY artist_key").fetchall()
+    return {"folders": [dict(r) for r in rows]}
+
+
+@app.post("/api/artist-folders/fetch")
+def fetch_artist_image(body: ArtistDir):
+    try:
+        with write_lock:
+            img = artist_images.fetch_one(conn, config.MUSIC_ROOT, body.rel_dir)
+    except FileNotFoundError:
+        raise HTTPException(404, "not an artist folder")
+    except OSError as e:
+        raise HTTPException(502, f"lookup failed: {e}")
+    if not img:
+        raise HTTPException(404, "no exact match with a photo on Deezer — upload one instead")
+    return {"image": img}
+
+
+@app.post("/api/artist-folders/fetch-missing")
+def fetch_missing_artist_images():
+    return artist_images.start_fetch_missing(conn, config.MUSIC_ROOT, write_lock)
+
+
+@app.get("/api/artist-folders/fetch-missing")
+def fetch_missing_status():
+    return artist_images.JOB
+
+
+@app.post("/api/artist-folders/upload")
+async def upload_artist_image(rel_dir: str = Form(...), file: UploadFile = File(...)):
+    data = await file.read(artist_images.MAX_BYTES + 1)
+    if not conn.execute("SELECT 1 FROM artist_folders WHERE rel_dir=?", (rel_dir,)).fetchone():
+        raise HTTPException(404, "not an artist folder")
+    try:
+        with write_lock:
+            artist_images.save_image(config.MUSIC_ROOT, rel_dir, data)
+            img = artist_images.record(conn, config.MUSIC_ROOT, rel_dir)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except FileNotFoundError:
+        raise HTTPException(404, "not an artist folder")
+    return {"image": img}
 
 
 # ── Scan ─────────────────────────────────────────────────────────────────────

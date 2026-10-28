@@ -16,8 +16,22 @@ from pathlib import Path
 
 from .parser import parse_rel_path, is_audio
 
-# case-insensitive artist.<img> avatar files
-_ARTIST_IMG_RE = re.compile(r"^artist\.(jpg|jpeg|png|webp|gif)$", re.IGNORECASE)
+IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".webp")
+# legacy avatar name, still honoured after the <Folder Name>.<ext> convention
+_LEGACY_IMG_RE = re.compile(r"^artist\.(jpg|jpeg|png|webp)$", re.IGNORECASE)
+
+
+def find_artist_image(folder: Path) -> Path | None:
+    """<folder>/<folder name>.<img ext> (any case), else legacy <folder>/artist.<ext>."""
+    try:
+        files = [p for p in folder.iterdir() if p.is_file()]
+    except OSError:
+        return None
+    want = folder.name.casefold()
+    for p in files:
+        if p.stem.casefold() == want and p.suffix.lower() in IMAGE_EXTS:
+            return p
+    return next((p for p in files if _LEGACY_IMG_RE.match(p.name)), None)
 
 
 def norm_key(s: str) -> str:
@@ -36,6 +50,7 @@ def scan(conn, music_root: str | Path) -> dict:
     root = Path(music_root)
     started = time.time()
     seen: set[str] = set()
+    artist_dirs: dict[str, tuple[str, str]] = {}   # rel_dir -> (artist_key, artist)
     n_files = 0
 
     cur = conn.cursor()
@@ -46,15 +61,6 @@ def scan(conn, music_root: str | Path) -> dict:
         if not path.is_file():
             continue
         rel = path.relative_to(root).as_posix()
-
-        # Cache artist avatar images (artist.* directly under an artist folder).
-        if _ARTIST_IMG_RE.match(path.name):
-            artist_folder = path.parent.name
-            cur.execute(
-                "INSERT OR REPLACE INTO artist_images(artist_key, rel_path) VALUES (?,?)",
-                (norm_key(artist_folder), rel),
-            )
-            continue
 
         if not is_audio(path.name):
             continue
@@ -93,11 +99,25 @@ def scan(conn, music_root: str | Path) -> dict:
         seen.add(pt.rel_path)
         n_files += 1
 
+        # A real artist folder sits right under the genre bucket (or the root).
+        if pt.artist and not pt.artist_inferred:
+            depth = 2 if pt.genre is not None else 1
+            artist_dirs.setdefault("/".join(rel.split("/")[:depth]),
+                                   (norm_key(pt.artist), pt.artist))
+
     # Prune vanished files.
     existing = {r[0] for r in cur.execute("SELECT rel_path FROM tracks")}
     gone = existing - seen
     if gone:
         cur.executemany("DELETE FROM tracks WHERE rel_path=?", ((g,) for g in gone))
+
+    cur.execute("DELETE FROM artist_folders")
+    for rel_dir, (key, name) in artist_dirs.items():
+        img = find_artist_image(root / rel_dir)
+        cur.execute(
+            "INSERT INTO artist_folders(rel_dir, artist_key, artist, image) VALUES (?,?,?,?)",
+            (rel_dir, key, name, img.relative_to(root).as_posix() if img else None),
+        )
 
     # Rebuild FTS from scratch (simple + correct).
     cur.execute("DELETE FROM tracks_fts")
@@ -111,5 +131,6 @@ def scan(conn, music_root: str | Path) -> dict:
         "ok": True,
         "tracks": n_files,
         "pruned": len(gone),
+        "artist_folders": len(artist_dirs),
         "seconds": round(time.time() - started, 2),
     }

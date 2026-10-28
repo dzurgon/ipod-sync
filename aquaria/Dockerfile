@@ -7,7 +7,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY app/ ./app/
 COPY scripts/ ./scripts/
 
-# Index DB lives on a volume; music is bind-mounted read-only, Playlists read-write.
+# Index DB lives on a volume; music + Playlists are bind-mounted (see docker-compose.yml).
 ENV AQUARIA_MUSIC_ROOT=/mnt/data/media/music/FLAC \
     AQUARIA_PLAYLIST_DIR=/mnt/data/media/music/Playlists \
     AQUARIA_DB=/data/aquaria.db \

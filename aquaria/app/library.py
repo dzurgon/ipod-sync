@@ -86,9 +86,10 @@ def view_artist(conn) -> list[dict]:
                MAX(t.artist_inferred) AS inferred,
                COUNT(DISTINCT t.album_key||'/'||IFNULL(t.year,'')) AS n_albums,
                COUNT(*) AS n_tracks,
-               ai.rel_path AS image
+               ai.image AS image
         FROM tracks t
-        LEFT JOIN artist_images ai ON ai.artist_key = t.artist_key
+        LEFT JOIN (SELECT artist_key, MIN(image) AS image FROM artist_folders
+                   GROUP BY artist_key) ai ON ai.artist_key = t.artist_key
         WHERE t.artist <> ''
         GROUP BY t.artist_key
         ORDER BY t.artist_key

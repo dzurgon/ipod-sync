@@ -314,6 +314,51 @@ function wireFolders(root, back){
 
 // ── Folder browse: mirrors FLAC/ on disk (0_GENRE/Artist/Album, or 0_GENRE/Artist - Album) ──
 let TREE = null;
+
+// ── Artist photos: <artist folder>/<artist folder name>.jpg, fetched or uploaded ──
+let ARTDIRS = {};              // rel_dir -> {rel_dir, artist_key, artist, image}
+let IMGV = Date.now();         // cache-buster, bumped whenever a photo changes
+const imgUrl = rel => "/media/" + enc(rel) + "?v=" + IMGV;
+
+async function loadArtDirs(){
+  ARTDIRS = Object.fromEntries((await api("/api/artist-folders")).folders.map(f=>[f.rel_dir, f]));
+}
+
+function artistHeader(dirs, title, sub){
+  const img = dirs.find(d=>d.image)?.image;
+  return `<div class="head">
+      <div class="thumb round">${img ? `<img src="${imgUrl(img)}">` : "👤"}</div>
+      <div class="info">
+        <h2>${esc(title)}</h2><div class="sub" style="margin:0">${esc(sub)}</div>
+        <div class="bar">
+          <button class="btn" id="artFetch">🔍 ${img ? "Re-fetch" : "Fetch"} photo</button>
+          <label class="btn">⬆ Upload photo<input type="file" id="artUpload" accept="image/jpeg,image/png,image/webp" hidden></label>
+        </div>
+        <div class="sub" style="margin:6px 0 0;font-size:11px">Saved as <code>${esc(dirs[0].rel_dir)}/${esc(dirs[0].rel_dir.split("/").pop())}.jpg</code>${dirs.length>1?` (+${dirs.length-1} other genre folder${dirs.length>2?'s':''})`:''}</div>
+      </div>
+    </div>`;
+}
+
+function wireArtistHeader(dirs, rerender){
+  const done = async msg => { IMGV = Date.now(); await loadArtDirs(); toast(msg); rerender(); };
+  $("#artFetch").onclick = async e => {
+    e.currentTarget.disabled = true; e.currentTarget.textContent = "Searching Deezer…";
+    try {
+      for(const d of dirs) await post("/api/artist-folders/fetch", {rel_dir:d.rel_dir});
+      done("Photo saved");
+    } catch(err){ toast(err.message); rerender(); }
+  };
+  $("#artUpload").onchange = async e => {
+    const f = e.target.files[0]; if(!f) return;
+    try {
+      for(const d of dirs){
+        const fd = new FormData(); fd.append("rel_dir", d.rel_dir); fd.append("file", f);
+        await api("/api/artist-folders/upload", {method:"POST", body:fd});
+      }
+      done("Photo uploaded");
+    } catch(err){ toast(err.message); }
+  };
+}
 const genreLabel = n => n.replace(/^\d+_/, "");
 
 function buildTree(albums){
@@ -339,15 +384,20 @@ function renderFolder(body){
   const albums = [...node.albums].sort((a,b)=>(a.artist_key+a.year).localeCompare(b.artist_key+b.year));
   const folderTile = name => {
     const k = node.kids[name], n = countAlbums(k), sub = Object.keys(k.kids).length;
+    const ad = ARTDIRS[[...PATH, name].join("/")];
     return tile({name: depth===0 ? genreLabel(name) : name,
       sub: depth===0 ? `${sub} folders · ${n} albums` : `${n} album${n===1?'':'s'}`,
-      icon: depth===0 ? 'genre' : 'head'}, `data-sub="${esc(name)}"`);
+      icon: depth===0 ? 'genre' : 'head', image: ad?.image ? imgUrl(ad.image) : null},
+      `data-sub="${esc(name)}"`);
   };
+  const here = ARTDIRS[PATH.join("/")];
   body.innerHTML = `<div class="crumb path">${crumbs}</div>
+    ${here ? artistHeader([here], here.artist, `${countAlbums(node)} albums · ${genreLabel(PATH[0])}`) : ""}
     <div class="grid">${folders.map(folderTile).join("")}${albums.map(a=>albumTile(a,
       depth>=2 ? (a.year||"") : `${a.artist}${a.year?' · '+a.year:''}`)).join("")}</div>`;
   body.querySelectorAll("[data-depth]").forEach(c=>c.onclick=()=>{ PATH = PATH.slice(0,+c.dataset.depth); renderFolder(body); });
   body.querySelectorAll("[data-sub]").forEach(el=>el.onclick=()=>{ PATH = [...PATH, el.dataset.sub]; renderFolder(body); });
+  if(here) wireArtistHeader([here], ()=>renderFolder(body));
   wireFolders(body, renderLibrary);
 }
 
@@ -365,7 +415,8 @@ async function renderLibrary(){
     b.onclick=()=>{ VIEW=b.dataset.v; PATH=[]; renderLibrary(); };
   });
   const body = $("#libbody");
-  const {items} = await api("/api/library?view="+(VIEW==="genre" ? "all_albums" : VIEW));
+  const [{items}] = await Promise.all([
+    api("/api/library?view="+(VIEW==="genre" ? "all_albums" : VIEW)), loadArtDirs()]);
   if(!items.length){ body.innerHTML=`<div class="empty">Library is empty or still indexing — refresh in a moment.</div>`; return; }
 
   if(VIEW==="genre"){
@@ -374,10 +425,16 @@ async function renderLibrary(){
     return;
   } else if(VIEW==="artist"){
     ARTISTS = items;
-    body.innerHTML = `<div class="grid">${items.map((a,i)=>tile({
-        name:a.artist, icon:'head', image:a.image ? "/media/"+enc(a.image) : null,
+    const nMissing = Object.values(ARTDIRS).filter(d=>!d.image).length;
+    body.innerHTML = `<div class="bar" style="display:flex;gap:10px;align-items:center;margin-bottom:16px;flex-wrap:wrap">
+        <button class="btn" id="fetchMissing" ${nMissing?'':'disabled'}>🔍 Fetch missing artist photos (${nMissing})</button>
+        <small class="sub" id="fetchStatus" style="margin:0"></small></div>
+      <div class="grid">${items.map((a,i)=>tile({
+        name:a.artist, icon:'head', image:a.image ? imgUrl(a.image) : null,
         n_albums:a.n_albums}, `data-ai="${i}"`)).join("")}</div>`;
     body.querySelectorAll("[data-ai]").forEach(el=>el.onclick=()=>renderArtist(ARTISTS[+el.dataset.ai]));
+    $("#fetchMissing").onclick = async ()=>{ await post("/api/artist-folders/fetch-missing"); pollFetch(); };
+    pollFetch();
   } else {
     body.innerHTML = `<div class="list">${items.map(a=>`
       <div class="row click" data-folder="${esc(a.folder)}">
@@ -388,10 +445,29 @@ async function renderLibrary(){
   wireFolders(body, renderLibrary);
 }
 
+let FETCHING = false;           // saw the bulk job running → re-render once it finishes
+async function pollFetch(){
+  const j = await api("/api/artist-folders/fetch-missing");
+  const st = $("#fetchStatus"); if(!st) return;
+  if(j.running){
+    FETCHING = true;
+    $("#fetchMissing").disabled = true;
+    st.textContent = `Fetching… ${j.done}/${j.total} · ${j.found} found`;
+    setTimeout(pollFetch, 1500);
+  } else if(j.total){
+    st.textContent = `Last run: ${j.found} of ${j.total} found` +
+      (j.missing.length ? ` — no exact match for ${j.missing.length}; open those artists to upload a photo` : "");
+    if(FETCHING){ FETCHING = false; IMGV = Date.now(); renderLibrary(); }
+  }
+}
+
 function renderArtist(a){
+  const dirs = Object.values(ARTDIRS).filter(d=>d.artist_key===a.artist_key);
   $("#panel").innerHTML = `<div class="crumb" id="back">← Library</div>
-    <h2>${esc(a.artist)}</h2><div class="sub">${a.n_albums} albums · ${a.n_tracks} tracks</div>
+    ${dirs.length ? artistHeader(dirs, a.artist, `${a.n_albums} albums · ${a.n_tracks} tracks`)
+      : `<h2>${esc(a.artist)}</h2><div class="sub">${a.n_albums} albums · ${a.n_tracks} tracks · no artist folder (name parsed from album folders), so no photo</div>`}
     <div class="grid">${a.albums.map(al=>albumTile(al, al.year||"")).join("")}</div>`;
+  if(dirs.length) wireArtistHeader(dirs, ()=>renderArtist(a));
   $("#back").onclick = renderLibrary;
   wireFolders($("#panel"), ()=>renderArtist(a));
 }

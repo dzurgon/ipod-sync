@@ -54,12 +54,16 @@ CREATE VIRTUAL TABLE IF NOT EXISTS tracks_fts USING fts5(
     title, album, artist, genre, track_id UNINDEXED
 );
 
--- Artist images (circle-cropped avatar), stored as case-insensitive artist.*
--- inside the artist folder. We just cache the rel_path here.
-CREATE TABLE IF NOT EXISTS artist_images (
-    artist_key TEXT PRIMARY KEY,
-    rel_path   TEXT NOT NULL
+-- Artist folders (e.g. 0_POP/Charli XCX) and their photo, if any. Convention: the
+-- photo sits inside the folder and is named after it — "Charli XCX/Charli XCX.jpg"
+-- (legacy artist.* also accepted). The same artist may have a folder per genre.
+CREATE TABLE IF NOT EXISTS artist_folders (
+    rel_dir    TEXT PRIMARY KEY,            -- relative to MUSIC_ROOT
+    artist_key TEXT NOT NULL,
+    artist     TEXT NOT NULL,
+    image      TEXT                         -- rel_path of the photo, NULL if none
 );
+CREATE INDEX IF NOT EXISTS idx_artist_folders_key ON artist_folders(artist_key);
 
 -- ── App state (persists across scans) ────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS users (
