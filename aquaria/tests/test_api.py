@@ -87,7 +87,7 @@ JPG = b"\xff\xd8\xff\xe0" + b"\0" * 32
 
 
 def _folders(client):
-    return {f["rel_dir"]: f for f in client.get("/api/artist-folders").json()["folders"]}
+    return {f["rel_dir"]: f for f in client.get("/api/folder-art").json()["artists"]}
 
 
 def test_artist_folders_indexed(client):
@@ -105,11 +105,11 @@ def test_same_name_convention_detected_on_scan(client):
 
 def test_upload_writes_convention_file(client):
     lib = Path(client.get("/healthz").json()["music_root"])
-    r = client.post("/api/artist-folders/upload", data={"rel_dir": "0_FOLK/Pete Seeger"},
+    r = client.post("/api/folder-art/upload", data={"rel_dir": "0_FOLK/Pete Seeger"},
                     files={"file": ("x.png", PNG, "image/png")})
     assert r.json()["image"] == "0_FOLK/Pete Seeger/Pete Seeger.png"
     # a second upload in another format replaces it rather than piling up
-    client.post("/api/artist-folders/upload", data={"rel_dir": "0_FOLK/Pete Seeger"},
+    client.post("/api/folder-art/upload", data={"rel_dir": "0_FOLK/Pete Seeger"},
                 files={"file": ("x.jpg", JPG, "image/jpeg")})
     imgs = sorted(p.name for p in (lib / "0_FOLK/Pete Seeger").iterdir() if p.is_file())
     assert imgs == ["Pete Seeger.jpg"]
@@ -117,15 +117,15 @@ def test_upload_writes_convention_file(client):
                 if a["artist"] == "Pete Seeger")
     assert pete["image"] == "0_FOLK/Pete Seeger/Pete Seeger.jpg"
 
-    bad = client.post("/api/artist-folders/upload", data={"rel_dir": "0_FOLK/Pete Seeger"},
+    bad = client.post("/api/folder-art/upload", data={"rel_dir": "0_FOLK/Pete Seeger"},
                       files={"file": ("x.txt", b"hello", "text/plain")})
     assert bad.status_code == 400
-    assert client.post("/api/artist-folders/upload", data={"rel_dir": "../../etc"},
+    assert client.post("/api/folder-art/upload", data={"rel_dir": "../../etc"},
                        files={"file": ("x.png", PNG, "image/png")}).status_code == 404
 
 
 def test_fetch_uses_exact_match_only(client, monkeypatch):
-    from app import artist_images
+    from app import folder_art
     calls = []
     def fake_get(url, timeout=15):
         calls.append(url)
@@ -133,13 +133,41 @@ def test_fetch_uses_exact_match_only(client, monkeypatch):
             return json.dumps({"data": [
                 {"name": "Pete Seeger & Friends", "nb_fan": 9999, "picture_xl": "https://x/artist/aaa/1.jpg"},
                 {"name": "pete seeger", "nb_fan": 10, "picture_xl": "https://x/artist/bbb/1.jpg"},
-                {"name": "Pete Seeger", "nb_fan": 5, "picture_xl": "https://x/artist//1.jpg"},
+                {"name": "Pete Seeger", "nb_fan": 5, "picture_xl": "https://x/images/artist//1000x1000-0.jpg"},
             ]}).encode()
         return JPG
-    monkeypatch.setattr(artist_images, "_get", fake_get)
-    r = client.post("/api/artist-folders/fetch", json={"rel_dir": "0_FOLK/Pete Seeger"})
+    monkeypatch.setattr(folder_art, "_get", fake_get)
+    r = client.post("/api/folder-art/fetch", json={"rel_dir": "0_FOLK/Pete Seeger"})
     assert r.json()["image"] == "0_FOLK/Pete Seeger/Pete Seeger.jpg"
     assert calls[-1] == "https://x/artist/bbb/1.jpg"       # exact name, real photo, not the placeholder
 
-    monkeypatch.setattr(artist_images, "_get", lambda url, timeout=15: b'{"data": []}')
-    assert client.post("/api/artist-folders/fetch", json={"rel_dir": "0_POP/Charli XCX"}).status_code == 404
+    monkeypatch.setattr(folder_art, "_get", lambda url, timeout=15: b'{"data": []}')
+    assert client.post("/api/folder-art/fetch", json={"rel_dir": "0_POP/Charli XCX"}).status_code == 404
+
+
+def test_genre_folders_indexed_and_fetched(client, monkeypatch):
+    from app import config, folder_art
+    g = {x["rel_dir"]: x for x in client.get("/api/folder-art").json()["genres"]}
+    assert g["0_POP"]["genre"] == "POP" and g["0_POP"]["image"] is None
+
+    monkeypatch.setitem(config.GENRE_ART_SOURCES, "JAZZ", "wikipedia:KWUR")
+    def fake_get(url, timeout=15):
+        if url.endswith("/genre"):
+            return json.dumps({"data": [
+                {"name": "Pop", "picture_xl": "https://x/images/misc/pop/1000x1000-0.jpg"}]}).encode()
+        if "wikipedia.org" in url:
+            assert url.endswith("/summary/KWUR")
+            return json.dumps({"originalimage": {"source": "https://w/Kwur_splotch.png"}}).encode()
+        return PNG if url.endswith(".png") else JPG
+    monkeypatch.setattr(folder_art, "_get", fake_get)
+
+    r = client.post("/api/folder-art/fetch", json={"rel_dir": "0_POP"})
+    assert r.json()["image"] == "0_POP/0_POP.jpg"                  # Deezer "Pop" by label
+    r = client.post("/api/folder-art/fetch", json={"rel_dir": "0_JAZZ"})
+    assert r.json()["image"] == "0_JAZZ/0_JAZZ.png"                # wikipedia alias, png kept
+    assert client.post("/api/folder-art/fetch", json={"rel_dir": "0_FOLK"}).status_code == 404
+    # the genre's own artwork must not be mistaken for anything else on rescan
+    client.post("/api/scan")
+    g = {x["rel_dir"]: x for x in client.get("/api/folder-art").json()["genres"]}
+    assert g["0_POP"]["image"] == "0_POP/0_POP.jpg"
+    assert client.get("/api/stats").json()["tracks"] == 14

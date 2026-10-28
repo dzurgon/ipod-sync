@@ -18,11 +18,13 @@ for the full design; this is the quick start.
 - Playlists: create / add (from album pages or the search bubble) / reorder /
   remove / delete. Mirrored to `Playlists/*.m3u` so `ipod-sync.sh` still pushes
   them; `.m3u` files edited elsewhere are re-imported on the next scan.
-- Artist photos: stored in the tree as `<artist folder>/<artist folder name>.jpg`
-  (e.g. `0_POP/Charli XCX/Charli XCX.jpg`; `.png`/`.webp` and legacy `artist.*`
-  also read). Fetched from Deezer's public API (exact-name matches only) one at
-  a time or in bulk from the Artist view, or uploaded by hand from any artist page.
-- `tests/` — 28 tests (parser edge cases, engine, playlist + download API).
+- Folder artwork: genre and artist folders carry a picture named after the folder,
+  inside it — `0_POP/0_POP.jpg`, `0_POP/Charli XCX/Charli XCX.jpg` (`.png`/`.webp`
+  and legacy `artist.*` also read; albums keep beets' `cover.jpg`). Artists come
+  from Deezer's artist search (exact-name matches only); genres from Deezer's genre
+  art by name, or per `AQUARIA_GENRE_ART` (`config.py`: e.g. `KWUR` → its Wikipedia
+  logo). Fetch one, fetch all missing, or upload by hand from the folder's page.
+- `tests/` — 29 tests (parser edge cases, engine, playlist + download API).
 
 ## Run locally (dev)
 
@@ -51,8 +53,8 @@ cd ~/docker/aquaria && docker compose up -d --build
 # http://100.94.158.95:8337  — indexes the library automatically on start
 ```
 
-FLAC is bind-mounted read-write, but the only thing Aquaria writes there is artist
-photos (`<Artist>/<Artist>.jpg`); audio and album folders are never touched.
+FLAC is bind-mounted read-write, but the only thing Aquaria writes there is folder
+artwork (`<Folder>/<Folder>.jpg`); audio and album folders are never touched.
 `Playlists/` is read-write. Deleted playlists are
 renamed to `*.m3u.deleted`, never unlinked.
 
@@ -68,5 +70,5 @@ renamed to `*.m3u.deleted`, never unlinked.
 | `GET /media/<rel_path>` · `GET /art/<folder>` | stream audio / cover art |
 | `GET /download/track/<rel_path>` | download one file |
 | `GET /download/album?folder=…` · `GET /download/playlist/<id>` | download as `.zip` |
-| `GET /api/artist-folders` · `POST …/fetch` · `POST …/upload` · `POST …/fetch-missing` | artist photos |
+| `GET /api/folder-art` · `POST …/fetch` · `POST …/upload` · `POST …/fetch-missing` | genre + artist artwork |
 | `GET/POST /api/playlists` · `/api/playlists/<id>[/tracks\|/items/…]` | playlist CRUD |

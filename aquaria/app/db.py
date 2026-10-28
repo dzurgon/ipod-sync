@@ -65,6 +65,13 @@ CREATE TABLE IF NOT EXISTS artist_folders (
 );
 CREATE INDEX IF NOT EXISTS idx_artist_folders_key ON artist_folders(artist_key);
 
+-- Genre bucket folders (e.g. 0_POP) and their artwork, same convention: 0_POP/0_POP.jpg
+CREATE TABLE IF NOT EXISTS genre_folders (
+    rel_dir TEXT PRIMARY KEY,                -- the bucket folder name, e.g. "0_POP"
+    genre   TEXT NOT NULL,                   -- label with the numeric prefix stripped
+    image   TEXT
+);
+
 -- ── App state (persists across scans) ────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS users (
     id         INTEGER PRIMARY KEY,

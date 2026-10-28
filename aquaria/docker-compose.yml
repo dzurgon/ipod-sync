@@ -19,7 +19,7 @@ services:
       TZ: ${TZ:-America/Chicago}
     volumes:
       - ./data:/data                                                    # SQLite index
-      # rw only so artist photos can be saved as <Artist>/<Artist>.jpg; audio is never written.
+      # rw only so folder artwork can be saved as <Folder>/<Folder>.jpg; audio is never written.
       - ${MUSIC_DIR:-/mnt/data/media/music/FLAC}:/mnt/data/media/music/FLAC
       - ${PLAYLIST_DIR:-/mnt/data/media/music/Playlists}:/mnt/data/media/music/Playlists
     ports:

@@ -21,7 +21,7 @@ IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".webp")
 _LEGACY_IMG_RE = re.compile(r"^artist\.(jpg|jpeg|png|webp)$", re.IGNORECASE)
 
 
-def find_artist_image(folder: Path) -> Path | None:
+def find_folder_image(folder: Path) -> Path | None:
     """<folder>/<folder name>.<img ext> (any case), else legacy <folder>/artist.<ext>."""
     try:
         files = [p for p in folder.iterdir() if p.is_file()]
@@ -51,6 +51,7 @@ def scan(conn, music_root: str | Path) -> dict:
     started = time.time()
     seen: set[str] = set()
     artist_dirs: dict[str, tuple[str, str]] = {}   # rel_dir -> (artist_key, artist)
+    genre_dirs: dict[str, str] = {}                # rel_dir -> genre label
     n_files = 0
 
     cur = conn.cursor()
@@ -99,6 +100,9 @@ def scan(conn, music_root: str | Path) -> dict:
         seen.add(pt.rel_path)
         n_files += 1
 
+        if pt.genre is not None:
+            genre_dirs.setdefault(rel.split("/")[0], pt.genre)
+
         # A real artist folder sits right under the genre bucket (or the root).
         if pt.artist and not pt.artist_inferred:
             depth = 2 if pt.genre is not None else 1
@@ -113,11 +117,16 @@ def scan(conn, music_root: str | Path) -> dict:
 
     cur.execute("DELETE FROM artist_folders")
     for rel_dir, (key, name) in artist_dirs.items():
-        img = find_artist_image(root / rel_dir)
+        img = find_folder_image(root / rel_dir)
         cur.execute(
             "INSERT INTO artist_folders(rel_dir, artist_key, artist, image) VALUES (?,?,?,?)",
             (rel_dir, key, name, img.relative_to(root).as_posix() if img else None),
         )
+    cur.execute("DELETE FROM genre_folders")
+    for rel_dir, genre in genre_dirs.items():
+        img = find_folder_image(root / rel_dir)
+        cur.execute("INSERT INTO genre_folders(rel_dir, genre, image) VALUES (?,?,?)",
+                    (rel_dir, genre, img.relative_to(root).as_posix() if img else None))
 
     # Rebuild FTS from scratch (simple + correct).
     cur.execute("DELETE FROM tracks_fts")

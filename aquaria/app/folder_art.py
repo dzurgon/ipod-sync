@@ -1,14 +1,19 @@
 """
-Artist photos — enrichment that lives in the file tree, not just the DB.
+Folder artwork — enrichment that lives in the file tree, not just the DB.
 
-Convention: an artist folder's photo is named after the folder, inside it:
+Convention: a folder's picture sits inside it and is named after it:
 
-    0_POP/Charli XCX/Charli XCX.jpg
+    0_POP/0_POP.jpg                    genre bucket artwork
+    0_POP/Charli XCX/Charli XCX.jpg    artist photo
 
 so it travels with the library (Nextcloud, rsync, backups) and any tool can find
-it. Photos come from Deezer's public API (no key needed) or a manual upload.
-Fetches only accept an exact (normalised) name match, so an ambiguous artist
-gets no photo rather than the wrong one.
+it. (Album folders keep beets' cover.jpg.) Pictures come from online sources or a
+manual upload:
+
+  * artists — Deezer's public artist search (no key needed), exact-name matches
+    only, so an ambiguous artist gets no photo rather than the wrong one.
+  * genres  — config.GENRE_ART_SOURCES: Deezer's genre artwork by name, or a
+    Wikipedia article's lead image (e.g. the KWUR station logo).
 """
 
 from __future__ import annotations
@@ -20,11 +25,17 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-from .indexer import IMAGE_EXTS, find_artist_image, norm_key
+from . import config
+from .indexer import IMAGE_EXTS, find_folder_image, norm_key
 
 DEEZER_SEARCH = "https://api.deezer.com/search/artist?limit=10&q="
+DEEZER_GENRES = "https://api.deezer.com/genre"
+WIKI_SUMMARY = "https://en.wikipedia.org/api/rest_v1/page/summary/"
 USER_AGENT = "Aquaria/0.4 (self-hosted music manager)"
 MAX_BYTES = 15 * 2**20
+
+# Which table holds each kind of folder, and the column naming the thing in it.
+KINDS = {"artist": ("artist_folders", "artist"), "genre": ("genre_folders", "genre")}
 
 # magic bytes -> extension
 _SIGS = ((b"\xff\xd8\xff", ".jpg"), (b"\x89PNG\r\n\x1a\n", ".png"))
@@ -45,21 +56,53 @@ def _get(url: str, timeout: int = 15) -> bytes:
         return r.read(MAX_BYTES + 1)
 
 
-def deezer_lookup(artist: str) -> str | None:
+# Deezer's "no picture" placeholder has an empty hash: .../images/artist//1000x1000...
+def _real(url: str | None) -> bool:
+    return bool(url) and "//1000x1000" not in url
+
+
+def deezer_artist(artist: str) -> str | None:
     """URL of the best exact-name match's 1000px photo, or None."""
     data = json.loads(_get(DEEZER_SEARCH + urllib.parse.quote(artist)))
     key = norm_key(artist)
     matches = [a for a in data.get("data", [])
-               if norm_key(a.get("name", "")) == key
-               # Deezer's "no photo" placeholder has an empty hash: .../artist//1000x1000...
-               and "/artist//" not in (a.get("picture_xl") or "/artist//")]
+               if norm_key(a.get("name", "")) == key and _real(a.get("picture_xl"))]
     if not matches:
         return None
     return max(matches, key=lambda a: a.get("nb_fan", 0))["picture_xl"]
 
 
+def deezer_genre(name: str) -> str | None:
+    key = norm_key(name)
+    for g in json.loads(_get(DEEZER_GENRES)).get("data", []):
+        if norm_key(g.get("name", "")) == key and _real(g.get("picture_xl")):
+            return g["picture_xl"]
+    return None
+
+
+def wikipedia_image(page: str) -> str | None:
+    data = json.loads(_get(WIKI_SUMMARY + urllib.parse.quote(page.replace(" ", "_"), safe="")))
+    return (data.get("originalimage") or data.get("thumbnail") or {}).get("source")
+
+
+def genre_lookup(genre: str) -> str | None:
+    source, _, name = config.GENRE_ART_SOURCES.get(genre, f"deezer:{genre}").partition(":")
+    if source == "wikipedia":
+        return wikipedia_image(name)
+    return deezer_genre(name)
+
+
+def kind_of(conn, rel_dir: str) -> tuple[str, str] | None:
+    """('artist'|'genre', display name) for a known folder, else None."""
+    for kind, (table, col) in KINDS.items():
+        row = conn.execute(f"SELECT {col} AS name FROM {table} WHERE rel_dir=?", (rel_dir,)).fetchone()
+        if row:
+            return kind, row["name"]
+    return None
+
+
 def save_image(music_root: Path, rel_dir: str, data: bytes) -> str:
-    """Write <rel_dir>/<folder name>.<ext>, replacing any previous convention photo."""
+    """Write <rel_dir>/<folder name>.<ext>, replacing any previous convention image."""
     if len(data) > MAX_BYTES:
         raise ValueError("image is larger than 15 MB")
     ext = sniff_ext(data)
@@ -80,19 +123,21 @@ def save_image(music_root: Path, rel_dir: str, data: bytes) -> str:
 
 
 def record(conn, music_root: Path, rel_dir: str) -> str | None:
-    img = find_artist_image(music_root / rel_dir)
+    img = find_folder_image(music_root / rel_dir)
     rel = img.relative_to(music_root).as_posix() if img else None
-    conn.execute("UPDATE artist_folders SET image=? WHERE rel_dir=?", (rel, rel_dir))
+    for table, _ in KINDS.values():
+        conn.execute(f"UPDATE {table} SET image=? WHERE rel_dir=?", (rel, rel_dir))
     conn.commit()
     return rel
 
 
 def fetch_one(conn, music_root: Path, rel_dir: str) -> str | None:
-    """Fetch + save a photo for one artist folder. Returns the image rel_path or None."""
-    row = conn.execute("SELECT artist FROM artist_folders WHERE rel_dir=?", (rel_dir,)).fetchone()
-    if not row:
+    """Fetch + save artwork for one artist or genre folder. Returns its rel_path or None."""
+    found = kind_of(conn, rel_dir)
+    if not found:
         raise FileNotFoundError(rel_dir)
-    url = deezer_lookup(row["artist"])
+    kind, name = found
+    url = deezer_artist(name) if kind == "artist" else genre_lookup(name)
     if not url:
         return None
     save_image(music_root, rel_dir, _get(url))
@@ -105,12 +150,13 @@ JOB = {"running": False, "done": 0, "total": 0, "found": 0, "missing": [], "erro
 _job_lock = threading.Lock()
 
 
-def start_fetch_missing(conn, music_root: Path, write_lock: threading.Lock) -> dict:
+def start_fetch_missing(conn, music_root: Path, write_lock: threading.Lock,
+                        kinds: tuple[str, ...] = ("genre", "artist")) -> dict:
     with _job_lock:
         if JOB["running"]:
             return dict(JOB)
-        dirs = [r["rel_dir"] for r in conn.execute(
-            "SELECT rel_dir FROM artist_folders WHERE image IS NULL ORDER BY rel_dir")]
+        dirs = [r["rel_dir"] for k in kinds for r in conn.execute(
+            f"SELECT rel_dir FROM {KINDS[k][0]} WHERE image IS NULL ORDER BY rel_dir")]
         JOB.update(running=True, done=0, total=len(dirs), found=0, missing=[], error=None)
 
     def run():
