@@ -75,6 +75,12 @@
   .list .row .r-genre{font-size:11px;color:var(--aqua-dim);white-space:nowrap}
   .row .main{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .row .num{color:var(--ink-dim);width:28px;font-variant-numeric:tabular-nums;font-size:13px}
+  /* Album tracklist: 5/8 width so the row actions stay near the title; play appears on hover */
+  .list.tracks{max-width:62.5%}
+  .row .hoverplay{opacity:0;transition:opacity .12s;flex-shrink:0}
+  .row:hover .hoverplay,.row.playing .hoverplay,.row .hoverplay:focus-visible{opacity:1}
+  @media (hover:none){ .row .hoverplay{opacity:1} }
+  @media (max-width:900px){ .list.tracks{max-width:none} }
   .row small{color:var(--ink-dim)}
   .row.playing{background:rgba(111,242,228,.16)}
   .row.missing{opacity:.5}
@@ -406,12 +412,12 @@ async function renderAlbum(folder){
         </div>
       </div>
     </div>
-    <div class="list">${tracks.map((t,i)=>`
+    <div class="list tracks">${tracks.map((t,i)=>`
       <div class="row" data-rel="${esc(t.rel_path)}">
         <div class="num">${t.disc_no?t.disc_no+'-':''}${t.track_no??i+1}</div>
+        <button class="btn icon hoverplay" data-play="${i}" title="Play">▶</button>
         <div class="main">${esc(t.title)} <small>· ${esc((t.ext||'').toUpperCase())}</small></div>
         <div class="acts">
-          <button class="btn icon" data-play="${i}" title="Play">▶</button>
           <a class="btn icon" href="/download/track/${enc(t.rel_path)}" title="Download">⬇</a>
           <button class="btn icon" data-add="${i}" title="Add to playlist">＋</button>
         </div>
