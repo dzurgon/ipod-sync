@@ -1,24 +1,28 @@
 """
-Aquaria Music Manager — FastAPI backend (core-engine iteration).
+Aquaria Music Manager — FastAPI backend.
 
-This pass focuses on the metadata engine: scan → index → the four Library
-projections + smart search + playlist resolution. Users / iPods / activity have
-their tables and basic endpoints scaffolded so the frontend can be built out.
+Engine: scan → index → the Library projections + smart search + playlist resolution.
+This iteration adds: browse into artists/albums, streaming + download (single
+track, whole album or playlist as a .zip), and the playlist write-path mirrored
+to PLAYLIST_DIR/*.m3u. Users / iPods / activity are still scaffolded.
 """
 
 from __future__ import annotations
 
 import json
+import threading
 import time
+import urllib.parse
+import zipfile
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 
 from . import config, db, indexer, library, playlists
-
-app = FastAPI(title="Aquaria Music Manager", version="0.2.0")
 
 # Use the configured DB path when its directory exists (the /data volume in
 # Docker); otherwise fall back to a local file for dev runs outside a container.
@@ -28,7 +32,28 @@ else:
     _db_path = "aquaria.db"
 conn = db.connect(_db_path)
 
+# One shared connection; serialise writers (scan, playlist edits) against each other.
+write_lock = threading.Lock()
+
 STATIC = Path(__file__).parent / "static"
+
+
+def _scan_and_sync() -> dict:
+    with write_lock:
+        summary = indexer.scan(conn, config.MUSIC_ROOT)
+        owner = playlists.ensure_user(conn, config.DEFAULT_USER)
+        summary["playlists"] = playlists.sync_dir(conn, config.PLAYLIST_DIR, owner)
+    return summary
+
+
+@asynccontextmanager
+async def lifespan(_app):
+    # Index in the background so the server is reachable immediately on boot.
+    threading.Thread(target=_scan_and_sync, daemon=True).start()
+    yield
+
+
+app = FastAPI(title="Aquaria Music Manager", version="0.3.0", lifespan=lifespan)
 
 
 # ── Library ──────────────────────────────────────────────────────────────────
@@ -74,12 +99,22 @@ def get_stats():
 
 # ── Media (audio + art) ──────────────────────────────────────────────────────
 
-@app.get("/media/{rel_path:path}")
-def media(rel_path: str):
+def _music_file(rel_path: str) -> Path:
     f = (config.MUSIC_ROOT / rel_path).resolve()
     if config.MUSIC_ROOT.resolve() not in f.parents or not f.is_file():
         raise HTTPException(404)
-    return FileResponse(f)
+    return f
+
+
+def _attachment(filename: str) -> dict:
+    ascii_name = filename.encode("ascii", "replace").decode().replace('"', "'")
+    return {"Content-Disposition": f'attachment; filename="{ascii_name}"; '
+                                   f"filename*=UTF-8''{urllib.parse.quote(filename)}"}
+
+
+@app.get("/media/{rel_path:path}")
+def media(rel_path: str):
+    return FileResponse(_music_file(rel_path))
 
 
 @app.get("/art/{folder:path}")
@@ -92,11 +127,167 @@ def art(folder: str):
     raise HTTPException(404, "no art")
 
 
+# ── Downloads ────────────────────────────────────────────────────────────────
+
+class _Sink:
+    """Write-only buffer that zipfile streams into; drained after every chunk."""
+    def __init__(self):
+        self.buf = bytearray()
+
+    def write(self, b):
+        self.buf += b
+        return len(b)
+
+    def flush(self):
+        pass
+
+    def drain(self) -> bytes:
+        out = bytes(self.buf)
+        self.buf.clear()
+        return out
+
+
+def _zip_stream(entries: list[tuple[Path, str]], extra: dict[str, str] | None = None):
+    """Stream a STORED (uncompressed — FLAC doesn't compress) zip without temp files."""
+    sink = _Sink()
+    with zipfile.ZipFile(sink, "w", zipfile.ZIP_STORED, allowZip64=True) as zf:
+        for src, arcname in entries:
+            zi = zipfile.ZipInfo.from_file(src, arcname)
+            with open(src, "rb") as f, zf.open(zi, "w", force_zip64=True) as w:
+                while chunk := f.read(1 << 20):
+                    w.write(chunk)
+                    yield sink.drain()
+        for arcname, text in (extra or {}).items():
+            zf.writestr(arcname, text)
+    yield sink.drain()
+
+
+def _zip_response(name: str, entries, extra=None) -> StreamingResponse:
+    return StreamingResponse(_zip_stream(entries, extra), media_type="application/zip",
+                             headers=_attachment(f"{name}.zip"))
+
+
+@app.get("/download/track/{rel_path:path}")
+def download_track(rel_path: str):
+    f = _music_file(rel_path)
+    return FileResponse(f, headers=_attachment(f.name))
+
+
+@app.get("/download/album")
+def download_album(folder: str):
+    tracks = library.album_tracks(conn, folder)
+    if not tracks:
+        raise HTTPException(404, "album not found")
+    album_dir = _music_file(tracks[0]["rel_path"]).parent
+    # Every file in the folder (tracks + cover art etc.), flat under one top dir.
+    t = tracks[0]
+    top = f'{t["artist"] or "Unknown Artist"} - {t["album"]}' + (f' ({t["year"]})' if t["year"] else "")
+    entries = [(p, f"{top}/{p.name}") for p in sorted(album_dir.iterdir()) if p.is_file()]
+    return _zip_response(top, entries)
+
+
+@app.get("/download/playlist/{playlist_id}")
+def download_playlist(playlist_id: int):
+    pl = playlists.get_playlist(conn, playlist_id)
+    if not pl:
+        raise HTTPException(404, "playlist not found")
+    entries, m3u = [], ["#EXTM3U"]
+    found = [i for i in pl["items"] if i["rel_path"]]
+    width = max(2, len(str(len(found))))
+    for n, it in enumerate(found, 1):
+        try:
+            src = _music_file(it["rel_path"])
+        except HTTPException:
+            continue
+        name = f'{n:0{width}d} - {it["artist"]} - {it["title"]}{src.suffix}'.replace("/", "_")
+        entries.append((src, f'{pl["name"]}/{name}'))
+        m3u.append(name)
+    return _zip_response(pl["name"], entries,
+                         {f'{pl["name"]}/{pl["name"]}.m3u': "\n".join(m3u) + "\n"})
+
+
+# ── Playlists ────────────────────────────────────────────────────────────────
+
+class NewPlaylist(BaseModel):
+    name: str
+
+
+class AddTracks(BaseModel):
+    rel_paths: list[str] = []
+    folder: str | None = None        # add a whole album
+
+
+class MoveItem(BaseModel):
+    delta: int
+
+
+def _owner_id() -> int:
+    return playlists.ensure_user(conn, config.DEFAULT_USER)
+
+
+@app.get("/api/playlists")
+def list_playlists():
+    return {"playlists": playlists.list_playlists(conn)}
+
+
+@app.post("/api/playlists")
+def create_playlist(body: NewPlaylist):
+    with write_lock:
+        try:
+            pid = playlists.create_playlist(conn, config.PLAYLIST_DIR, _owner_id(), body.name)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        except FileExistsError as e:
+            raise HTTPException(409, str(e))
+    return playlists.get_playlist(conn, pid)
+
+
+@app.get("/api/playlists/{playlist_id}")
+def get_playlist(playlist_id: int):
+    pl = playlists.get_playlist(conn, playlist_id)
+    if not pl:
+        raise HTTPException(404, "playlist not found")
+    return pl
+
+
+@app.post("/api/playlists/{playlist_id}/tracks")
+def add_tracks(playlist_id: int, body: AddTracks):
+    get_playlist(playlist_id)
+    rels = list(body.rel_paths)
+    if body.folder:
+        rels += [t["rel_path"] for t in library.album_tracks(conn, body.folder)]
+    with write_lock:
+        added = playlists.add_tracks(conn, playlist_id, rels)
+    return {"added": added}
+
+
+@app.delete("/api/playlists/{playlist_id}/items/{item_id}")
+def remove_item(playlist_id: int, item_id: int):
+    with write_lock:
+        playlists.remove_item(conn, playlist_id, item_id)
+    return {"ok": True}
+
+
+@app.post("/api/playlists/{playlist_id}/items/{item_id}/move")
+def move_item(playlist_id: int, item_id: int, body: MoveItem):
+    with write_lock:
+        playlists.move_item(conn, playlist_id, item_id, body.delta)
+    return {"ok": True}
+
+
+@app.delete("/api/playlists/{playlist_id}")
+def delete_playlist(playlist_id: int):
+    get_playlist(playlist_id)
+    with write_lock:
+        playlists.delete_playlist(conn, playlist_id)
+    return {"ok": True}
+
+
 # ── Scan ─────────────────────────────────────────────────────────────────────
 
 @app.post("/api/scan")
 def rescan():
-    return indexer.scan(conn, config.MUSIC_ROOT)
+    return _scan_and_sync()
 
 
 # ── Users (scaffold) ─────────────────────────────────────────────────────────
@@ -131,7 +322,7 @@ def create_user(username: str):
     return {"id": cur.lastrowid, "username": username}
 
 
-# ── Frontend (minimal aquamarine demo) ───────────────────────────────────────
+# ── Frontend (single-file UI) ────────────────────────────────────────────────
 
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
 

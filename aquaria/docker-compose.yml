@@ -1,24 +1,33 @@
+# Aquaria — deployed on the NUC as /home/jimin/docker/aquaria/docker-compose.yml
+# (homelab conventions: one dir per service, 0.0.0.0 ports, external `proxy` network,
+# always-on, no Caddy for internal services).
+#
+# The image is built from a clone of this repo (default /home/jimin/code/ipod-sync).
+# Update: git -C /home/jimin/code/ipod-sync pull && docker compose up -d --build
 services:
   aquaria:
-    build: .
+    build:
+      context: ${IPOD_SYNC_SRC:-/home/jimin/code/ipod-sync}/aquaria
+    image: aquaria:latest
     container_name: aquaria
-    ports:
-      - "8337:8337"
-    volumes:
-      # Music library — read-only; Aquaria never mutates your files on disk.
-      - /mnt/data/media/music/FLAC:/mnt/data/media/music/FLAC:ro
-      # Playlists live outside the FLAC tree and ARE written by Aquaria.
-      - /mnt/data/media/music/Playlists:/mnt/data/media/music/Playlists
-      # Persistent index DB + app state.
-      - aquaria-data:/data
-    environment:
-      AQUARIA_MUSIC_ROOT: /mnt/data/media/music/FLAC
-      AQUARIA_DB: /data/aquaria.db
     restart: unless-stopped
-    # iPod access (libgpod/udev) is added in a later iteration; it needs
-    # privileged USB passthrough:
+    # jimin — the FLAC tree is owner-only readable, and playlists written here must stay
+    # editable by the host-side ipod-sync.sh / music-watcher (which run as jimin).
+    user: "1000:1000"
+    environment:
+      AQUARIA_DEFAULT_USER: ${AQUARIA_DEFAULT_USER:-jimin}
+      TZ: ${TZ:-America/Chicago}
+    volumes:
+      - ./data:/data                                                    # SQLite index
+      - ${MUSIC_DIR:-/mnt/data/media/music/FLAC}:/mnt/data/media/music/FLAC:ro
+      - ${PLAYLIST_DIR:-/mnt/data/media/music/Playlists}:/mnt/data/media/music/Playlists
+    ports:
+      - "0.0.0.0:8337:8337"   # Tailscale 100.94.158.95:8337, LAN 192.168.1.65:8337
+    networks:
+      - proxy
+    # iPod access (libgpod/udev) lands in a later iteration; it needs USB passthrough:
     #   devices: ["/dev/bus/usb:/dev/bus/usb"]
-    #   privileged: true
 
-volumes:
-  aquaria-data:
+networks:
+  proxy:
+    external: true

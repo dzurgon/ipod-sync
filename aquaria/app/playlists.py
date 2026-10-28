@@ -17,7 +17,9 @@ paths for whichever layout (genre / flat) a user's iPod uses.
 
 from __future__ import annotations
 
-from pathlib import PurePosixPath
+import re
+import time
+from pathlib import Path, PurePosixPath
 
 from .parser import normalize_legacy_album, parse_track_filename
 from .indexer import norm_key
@@ -90,3 +92,198 @@ def ipod_path(conn, track_id: int, layout: str = "genre") -> str | None:
         if parts and parts[0].split("_", 1)[0].isdigit():
             return "/".join(parts[1:])
     return rel
+
+
+# ── Write path: CRUD + .m3u round-trip ───────────────────────────────────────
+#
+# The DB is what the UI edits; each playlist is mirrored to <PLAYLIST_DIR>/<name>.m3u
+# (one rel_path per line, relative to MUSIC_ROOT) so the existing ipod-sync.sh push
+# keeps working unchanged. Files edited outside Aquaria (e.g. pulled off the iPod)
+# are re-imported on the next sync_dir() when their mtime is newer than the DB copy.
+
+
+def safe_name(name: str) -> str:
+    """Same rule as the legacy app: word chars, spaces and dashes only."""
+    return re.sub(r"[^\w\s\-]", "", name).strip()
+
+
+def ensure_user(conn, username: str) -> int:
+    row = conn.execute("SELECT id FROM users WHERE username=?", (username,)).fetchone()
+    if row:
+        return row["id"]
+    cur = conn.execute(
+        "INSERT INTO users(username, settings, created_at) VALUES (?,?,?)",
+        (username, "{}", time.time()),
+    )
+    return cur.lastrowid
+
+
+def _read_lines(path: Path) -> list[str]:
+    text = path.read_text(encoding="utf-8", errors="replace")
+    return [l.strip() for l in text.splitlines() if l.strip() and not l.startswith("#")]
+
+
+def _set_items(conn, playlist_id: int, lines: list[str]) -> None:
+    conn.execute("DELETE FROM playlist_items WHERE playlist_id=?", (playlist_id,))
+    for pos, line in enumerate(lines):
+        tid, flag = resolve_line(conn, line)
+        conn.execute(
+            "INSERT INTO playlist_items(playlist_id, position, raw_line, track_id, resolved) "
+            "VALUES (?,?,?,?,?)",
+            (playlist_id, pos, line, tid, flag),
+        )
+
+
+def write_file(conn, playlist_id: int) -> None:
+    pl = conn.execute("SELECT file_path FROM playlists WHERE id=?", (playlist_id,)).fetchone()
+    if not pl or not pl["file_path"]:
+        return
+    lines = [r["raw_line"] for r in conn.execute(
+        "SELECT raw_line FROM playlist_items WHERE playlist_id=? ORDER BY position",
+        (playlist_id,),
+    )]
+    path = Path(pl["file_path"])
+    tmp = path.with_suffix(".m3u.tmp")
+    tmp.write_text("#EXTM3U\n" + "".join(l + "\n" for l in lines), encoding="utf-8")
+    tmp.replace(path)
+    # Record the file's own mtime so sync_dir() doesn't treat our write as an external edit.
+    conn.execute("UPDATE playlists SET updated_at=? WHERE id=?",
+                 (path.stat().st_mtime, playlist_id))
+
+
+def sync_dir(conn, playlist_dir: Path, owner_id: int) -> dict:
+    """Import new .m3u files and reload ones changed on disk since we last wrote them."""
+    imported = reloaded = 0
+    if not playlist_dir.is_dir():
+        return {"imported": 0, "reloaded": 0}
+    for path in sorted(playlist_dir.glob("*.m3u")):
+        mtime = path.stat().st_mtime
+        row = conn.execute("SELECT id, updated_at FROM playlists WHERE file_path=?",
+                           (str(path),)).fetchone()
+        if row is None:
+            cur = conn.execute(
+                "INSERT INTO playlists(user_id, name, is_global, file_path, created_at, updated_at) "
+                "VALUES (?,?,1,?,?,?)",
+                (owner_id, path.stem, str(path), mtime, mtime),
+            )
+            _set_items(conn, cur.lastrowid, _read_lines(path))
+            imported += 1
+        elif mtime > row["updated_at"] + 1:
+            _set_items(conn, row["id"], _read_lines(path))
+            conn.execute("UPDATE playlists SET updated_at=? WHERE id=?", (mtime, row["id"]))
+            reloaded += 1
+        else:
+            # Re-resolve lines against a possibly rescanned library (ids survive
+            # rescans, but pruned tracks were nulled and may have reappeared).
+            for it in conn.execute(
+                "SELECT id, raw_line FROM playlist_items WHERE playlist_id=? AND track_id IS NULL",
+                (row["id"],),
+            ).fetchall():
+                tid, flag = resolve_line(conn, it["raw_line"])
+                if tid:
+                    conn.execute("UPDATE playlist_items SET track_id=?, resolved=? WHERE id=?",
+                                 (tid, flag, it["id"]))
+    conn.commit()
+    return {"imported": imported, "reloaded": reloaded}
+
+
+def list_playlists(conn) -> list[dict]:
+    rows = conn.execute("""
+        SELECT p.id, p.name, p.updated_at, u.username AS owner,
+               COUNT(i.id) AS n_tracks,
+               SUM(CASE WHEN i.id IS NOT NULL AND i.track_id IS NULL THEN 1 ELSE 0 END) AS n_missing
+        FROM playlists p
+        JOIN users u ON u.id = p.user_id
+        LEFT JOIN playlist_items i ON i.playlist_id = p.id
+        GROUP BY p.id ORDER BY LOWER(p.name)
+    """).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_playlist(conn, playlist_id: int) -> dict | None:
+    pl = conn.execute("SELECT id, name, updated_at FROM playlists WHERE id=?",
+                      (playlist_id,)).fetchone()
+    if not pl:
+        return None
+    items = conn.execute("""
+        SELECT i.id AS item_id, i.position, i.raw_line, i.resolved,
+               t.id AS track_id, t.rel_path, t.title, t.artist, t.album, t.year, t.ext
+        FROM playlist_items i LEFT JOIN tracks t ON t.id = i.track_id
+        WHERE i.playlist_id=? ORDER BY i.position
+    """, (playlist_id,)).fetchall()
+    return {**dict(pl), "items": [dict(i) for i in items]}
+
+
+def create_playlist(conn, playlist_dir: Path, owner_id: int, name: str) -> int:
+    name = safe_name(name)
+    if not name:
+        raise ValueError("playlist name is empty or invalid")
+    path = playlist_dir / f"{name}.m3u"
+    if path.exists() or conn.execute("SELECT 1 FROM playlists WHERE LOWER(name)=LOWER(?)",
+                                     (name,)).fetchone():
+        raise FileExistsError(f"playlist '{name}' already exists")
+    now = time.time()
+    cur = conn.execute(
+        "INSERT INTO playlists(user_id, name, is_global, file_path, created_at, updated_at) "
+        "VALUES (?,?,1,?,?,?)",
+        (owner_id, name, str(path), now, now),
+    )
+    write_file(conn, cur.lastrowid)
+    conn.commit()
+    return cur.lastrowid
+
+
+def add_tracks(conn, playlist_id: int, rel_paths: list[str]) -> int:
+    """Append tracks (by rel_path), skipping ones already present. Returns # added."""
+    existing = {r["track_id"] for r in conn.execute(
+        "SELECT track_id FROM playlist_items WHERE playlist_id=?", (playlist_id,))}
+    pos = conn.execute("SELECT COALESCE(MAX(position)+1, 0) FROM playlist_items WHERE playlist_id=?",
+                       (playlist_id,)).fetchone()[0]
+    added = 0
+    for rel in rel_paths:
+        t = conn.execute("SELECT id FROM tracks WHERE rel_path=?", (rel,)).fetchone()
+        if not t or t["id"] in existing:
+            continue
+        conn.execute(
+            "INSERT INTO playlist_items(playlist_id, position, raw_line, track_id, resolved) "
+            "VALUES (?,?,?,?,1)",
+            (playlist_id, pos, rel, t["id"]),
+        )
+        existing.add(t["id"])
+        pos += 1
+        added += 1
+    if added:
+        write_file(conn, playlist_id)
+    conn.commit()
+    return added
+
+
+def remove_item(conn, playlist_id: int, item_id: int) -> None:
+    conn.execute("DELETE FROM playlist_items WHERE id=? AND playlist_id=?", (item_id, playlist_id))
+    write_file(conn, playlist_id)
+    conn.commit()
+
+
+def move_item(conn, playlist_id: int, item_id: int, delta: int) -> None:
+    ids = [r["id"] for r in conn.execute(
+        "SELECT id FROM playlist_items WHERE playlist_id=? ORDER BY position", (playlist_id,))]
+    if item_id not in ids:
+        return
+    i = ids.index(item_id)
+    j = max(0, min(len(ids) - 1, i + delta))
+    ids.insert(j, ids.pop(i))
+    for pos, iid in enumerate(ids):
+        conn.execute("UPDATE playlist_items SET position=? WHERE id=?", (pos, iid))
+    write_file(conn, playlist_id)
+    conn.commit()
+
+
+def delete_playlist(conn, playlist_id: int) -> None:
+    """Drop from the DB; the .m3u is renamed to *.m3u.deleted (not unlinked) so it's recoverable."""
+    pl = conn.execute("SELECT file_path FROM playlists WHERE id=?", (playlist_id,)).fetchone()
+    if pl and pl["file_path"]:
+        p = Path(pl["file_path"])
+        if p.exists():
+            p.replace(p.with_name(p.name + ".deleted"))
+    conn.execute("DELETE FROM playlists WHERE id=?", (playlist_id,))
+    conn.commit()

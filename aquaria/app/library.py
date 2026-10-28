@@ -148,7 +148,8 @@ def search(conn, query: str, limit: int = 50) -> dict:
         ak = (t["artist"], t["album"], t["year"])
         if ak not in seen_alb:
             seen_alb.add(ak)
-            albums.append({"artist": t["artist"], "album": t["album"], "year": t["year"]})
+            albums.append({"artist": t["artist"], "album": t["album"], "year": t["year"],
+                           "folder": t["rel_path"].rsplit("/", 1)[0]})
         if t["artist"] not in seen_art:
             seen_art.add(t["artist"])
             artists.append({"artist": t["artist"]})

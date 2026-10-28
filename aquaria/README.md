@@ -11,8 +11,14 @@ for the full design; this is the quick start.
 - `app/indexer.py` — scans `0_GENRE/…` into the index; never mutates disk.
 - `app/library.py` — the four Library views + FTS smart search.
 - `app/playlists.py` — resolves messy/legacy playlist lines to tracks; iPod path projection.
-- `app/main.py` — FastAPI API + minimal aquamarine demo UI.
-- `tests/` — 20 tests (parser edge cases + end-to-end engine).
+- `app/main.py` — FastAPI API + single-file aquamarine UI.
+- Browse: **Folders** view mirrors `FLAC/` on disk (`0_GENRE` → artist → album),
+  plus Artist and All Albums views; album pages with in-browser playback.
+- Download: single tracks, whole albums or playlists as streamed `.zip` files.
+- Playlists: create / add (from album pages or the search bubble) / reorder /
+  remove / delete. Mirrored to `Playlists/*.m3u` so `ipod-sync.sh` still pushes
+  them; `.m3u` files edited elsewhere are re-imported on the next scan.
+- `tests/` — 24 tests (parser edge cases, engine, playlist + download API).
 
 ## Run locally (dev)
 
@@ -21,7 +27,7 @@ pip install -r requirements.txt
 python scripts/make_sample_library.py            # fake FLAC tree for testing
 AQUARIA_MUSIC_ROOT=./sample_library AQUARIA_DB=./aquaria.db \
   uvicorn app.main:app --reload --port 8337
-# open http://localhost:8337  → POST /api/scan once to index
+# open http://localhost:8337  (indexes on startup; POST /api/scan to rescan)
 ```
 
 ## Run tests
@@ -30,11 +36,19 @@ AQUARIA_MUSIC_ROOT=./sample_library AQUARIA_DB=./aquaria.db \
 pip install pytest && pytest tests/
 ```
 
-## Run in Docker (server)
+## Run in Docker (homelab)
+
+Follows the `~/docker/<service>/` convention; the image builds from the repo clone.
 
 ```bash
-docker compose up -d --build   # binds /mnt/data/media/music/FLAC read-only
+git -C ~/code/ipod-sync pull
+mkdir -p ~/docker/aquaria && cp ~/code/ipod-sync/aquaria/docker-compose.yml ~/docker/aquaria/
+cd ~/docker/aquaria && docker compose up -d --build
+# http://100.94.158.95:8337  — indexes the library automatically on start
 ```
+
+FLAC is bind-mounted read-only; `Playlists/` read-write. Deleted playlists are
+renamed to `*.m3u.deleted`, never unlinked.
 
 ## Key endpoints
 
@@ -46,3 +60,6 @@ docker compose up -d --build   # binds /mnt/data/media/music/FLAC read-only
 | `GET /api/search?q=…` | grouped smart search (artists/albums/tracks) |
 | `GET /api/users` | users + linked iPods |
 | `GET /media/<rel_path>` · `GET /art/<folder>` | stream audio / cover art |
+| `GET /download/track/<rel_path>` | download one file |
+| `GET /download/album?folder=…` · `GET /download/playlist/<id>` | download as `.zip` |
+| `GET/POST /api/playlists` · `/api/playlists/<id>[/tracks\|/items/…]` | playlist CRUD |

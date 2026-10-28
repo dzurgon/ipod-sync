@@ -5,3 +5,5 @@ sample_library/
 __pycache__/
 *.pyc
 .venv/
+*.db-journal
+data/
