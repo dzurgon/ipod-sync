@@ -17,6 +17,12 @@ services:
     environment:
       AQUARIA_DEFAULT_USER: ${AQUARIA_DEFAULT_USER:-jimin}
       TZ: ${TZ:-America/Chicago}
+      # Secrets live in .env next to this file (never committed):
+      #   AQUARIA_HOST_TOKEN  shared with the host's /etc/ipod-sync/aquaria.env (install-host.sh)
+      #   LASTFM_API_KEY / LASTFM_API_SECRET  enable per-user "Connect Last.fm"
+      AQUARIA_HOST_TOKEN: ${AQUARIA_HOST_TOKEN:-}
+      LASTFM_API_KEY: ${LASTFM_API_KEY:-}
+      LASTFM_API_SECRET: ${LASTFM_API_SECRET:-}
     volumes:
       - ./data:/data                                                    # SQLite index
       # rw only so folder artwork can be saved as <Folder>/<Folder>.jpg; audio is never written.

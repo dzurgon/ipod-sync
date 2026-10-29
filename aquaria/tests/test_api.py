@@ -2,36 +2,8 @@
 
 import io
 import json
-import importlib
-import subprocess
-import sys
 import zipfile
 from pathlib import Path
-
-import pytest
-from fastapi.testclient import TestClient
-
-ROOT = Path(__file__).parent.parent
-sys.path.insert(0, str(ROOT))
-
-
-@pytest.fixture
-def client(tmp_path, monkeypatch):
-    lib, pls, data = tmp_path / "lib", tmp_path / "Playlists", tmp_path / "data"
-    subprocess.run([sys.executable, str(ROOT / "scripts" / "make_sample_library.py"), str(lib)], check=True)
-    for f in lib.rglob("*.flac"):
-        f.write_bytes(b"fLaC" + f.name.encode())   # non-empty so zips carry real bytes
-    pls.mkdir(); data.mkdir()
-    (pls / "Legacy.m3u").write_text("#EXTM3U\n(2023) yeule - softscars [FLAC]/02. sulky baby.flac\n")
-    monkeypatch.setenv("AQUARIA_MUSIC_ROOT", str(lib))
-    monkeypatch.setenv("AQUARIA_PLAYLIST_DIR", str(pls))
-    monkeypatch.setenv("AQUARIA_DB", str(data / "aquaria.db"))
-    from app import config, main
-    importlib.reload(config); main = importlib.reload(main)
-    main._scan_and_sync()
-    with TestClient(main.app) as c:
-        c.pls = pls
-        yield c
 
 
 def test_legacy_m3u_imported(client):
@@ -43,7 +15,7 @@ def test_legacy_m3u_imported(client):
 def test_playlist_crud_roundtrips_to_m3u(client):
     p = client.post("/api/playlists", json={"name": "Road Trip!"}).json()
     assert p["name"] == "Road Trip"
-    m3u = client.pls / "Road Trip.m3u"
+    m3u = client.pls / "jimin" / "Road Trip.m3u"
     assert m3u.read_text() == "#EXTM3U\n"
 
     folder = "0_POP/Charli XCX/BRAT (2025)"
@@ -60,7 +32,7 @@ def test_playlist_crud_roundtrips_to_m3u(client):
 
     assert client.post("/api/playlists", json={"name": "road trip"}).status_code == 409
     client.delete(f"/api/playlists/{p['id']}")
-    assert not m3u.exists() and (client.pls / "Road Trip.m3u.deleted").exists()
+    assert not m3u.exists() and (client.pls / "jimin" / "Road Trip.m3u.deleted").exists()
 
 
 def test_download_track_and_album(client):

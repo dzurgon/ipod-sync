@@ -28,8 +28,29 @@
   h2{margin:0 0 4px;font-size:20px}
   .sub{color:var(--ink-dim);font-size:13px;margin-bottom:22px}
 
+  /* Header + account */
+  .top{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap}
+  .acct{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  .acct .me{color:var(--ink);text-decoration:none;font-weight:600}
+  .acct .me:hover{color:var(--aqua)}
+  .card{background:rgba(0,0,0,.18);border:1px solid var(--line);border-radius:16px;padding:16px;margin-bottom:14px}
+  .card h3{margin:0 0 4px;font-size:16px}
+  .form{display:grid;gap:12px;max-width:360px}
+  .form label{font-size:13px;color:var(--ink-dim);display:grid;gap:4px}
+  .opts{display:flex;flex-wrap:wrap;gap:6px 14px;font-size:13px}
+  .opts label{display:flex;align-items:center;gap:6px;color:var(--ink)}
+  .sec-h{font-size:12px;letter-spacing:1.5px;text-transform:uppercase;color:var(--aqua-dim);margin:20px 0 8px}
+  .pill{display:inline-block;font-size:11px;padding:1px 8px;border-radius:10px;border:1px solid var(--line);color:var(--ink-dim)}
+  .pill.ok{border-color:var(--aqua);color:var(--aqua)}
+  .pill.err{border-color:#ff8a8a;color:#ffb3b3}
+  .avatar{width:96px;height:96px;border-radius:50%;background:linear-gradient(145deg,#0b5b63,#0a3b45);
+          border:1px solid var(--line);display:flex;align-items:center;justify-content:center;font-size:40px;font-weight:700;flex-shrink:0}
+  .settings{display:grid;gap:14px;margin-top:12px}
+  .settings > div > b{display:block;font-size:12px;color:var(--ink-dim);font-weight:600;margin-bottom:6px}
+
   /* Users row */
   .users{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:20px}
+  a.user{color:inherit;text-decoration:none}
   .user{background:var(--glass);border:1px solid var(--line);border-radius:16px;
         padding:12px 16px;min-width:150px;backdrop-filter:blur(8px)}
   .user.active{border-color:var(--aqua);box-shadow:0 0 0 1px var(--aqua),0 8px 30px rgba(111,242,228,.18)}
@@ -160,8 +181,11 @@
 </head>
 <body>
 <div class="wrap">
-  <h1>Aquaria Music Manager</h1>
-  <div class="sub" id="stats">loading library…</div>
+  <div class="top">
+    <div><h1>Aquaria Music Manager</h1>
+      <div class="sub" id="stats">loading library…</div></div>
+    <div class="acct" id="acct"></div>
+  </div>
 
   <div class="users" id="users"></div>
 
@@ -200,7 +224,10 @@ let VIEW = "genre";
 let PATH = [];               // folder-browse position, e.g. ["0_FOLK","Pete Seeger"]
 let NAV = 0;                 // bumped per navigation; stale async renders bail out
 let EDITING = null;          // playlist id that search results add to
-let PLAYLISTS = [];
+let PLAYLISTS = [];          // every playlist visible to the viewer
+let MINE = [];               // the viewer's own (editable) playlists
+let ME = null;               // {username, lastfm_user} when logged in
+let LASTFM_OK = false;       // server has Last.fm API credentials
 let QUEUE = [], QI = -1;     // play queue of {rel_path,title,artist}
 
 async function api(path, opts){
@@ -224,22 +251,38 @@ async function loadStats(){
   return s;
 }
 
+async function loadMe(){
+  const r = await api("/api/auth/me");
+  ME = r.user; LASTFM_OK = r.lastfm_available;
+  $("#acct").innerHTML = ME
+    ? `<a class="me" data-link href="/user/${encodeURIComponent(ME.username)}">👤 ${esc(ME.username)}</a>
+       <button class="btn" id="logout">Log out</button>`
+    : `<a class="btn" data-link href="/login">Log in</a><a class="btn primary" data-link href="/signup">Sign up</a>`;
+  if(ME) $("#logout").onclick = async ()=>{ await post("/api/auth/logout"); await refreshSession(); toast("Logged out"); };
+}
+
+// After login/logout: reload who-am-I, the user row and playlists, then redraw the page.
+async function refreshSession(){
+  EDITING = null;
+  await loadMe(); await Promise.all([loadUsers(), loadPlaylists()]); route();
+}
+
 async function loadUsers(){
   const {users} = await api("/api/users");
-  const el = $("#users");
-  if(!users.length){ el.innerHTML = ""; return; }
-  el.innerHTML = users.map((u,i)=>`
-    <div class="user ${i===0?'active':''}">
+  $("#users").innerHTML = users.filter(u=>u.claimed).map(u=>`
+    <a class="user ${ME && ME.username===u.username ? 'active':''}" data-link href="/user/${encodeURIComponent(u.username)}">
       <div class="name">${esc(u.username)}</div>
-      <div class="ipods">${u.ipods.length ? u.ipods.map(p=>esc(p.name)).join(" · ") : "no iPods linked"}</div>
-    </div>`).join("");
+      <div class="ipods">${u.n_public} public playlist${u.n_public===1?'':'s'} · ${u.n_ipods} iPod${u.n_ipods===1?'':'s'}</div>
+    </a>`).join("");
 }
 
 async function loadPlaylists(){
   PLAYLISTS = (await api("/api/playlists")).playlists;
+  MINE = PLAYLISTS.filter(p=>p.is_mine);
+  $("#editSel").hidden = !ME;
   $("#editSel").innerHTML = `<option value="">— click a result to play —</option>` +
-    PLAYLISTS.map(p=>`<option value="${p.id}" ${p.id===EDITING?'selected':''}>Add to: ${esc(p.name)}</option>`).join("");
-  const cur = PLAYLISTS.find(p=>p.id===EDITING);
+    MINE.map(p=>`<option value="${p.id}" ${p.id===EDITING?'selected':''}>Add to: ${esc(p.name)}</option>`).join("");
+  const cur = MINE.find(p=>p.id===EDITING);
   if(!cur) EDITING = null;
   $("#fabLabel").textContent = cur ? `Editing ${cur.name}` : "Search";
 }
@@ -263,9 +306,14 @@ document.addEventListener("click", e=>{ if(!e.target.closest(".pop,[data-add]"))
 
 async function addTo(pid, payload){
   const r = await post(`/api/playlists/${pid}/tracks`, payload);
-  const p = PLAYLISTS.find(x=>x.id===pid);
+  const p = MINE.find(x=>x.id===pid);
   toast(r.added ? `Added ${r.added} to ${p?p.name:"playlist"}` : "Already in playlist");
   loadPlaylists();
+}
+
+function needLogin(what){
+  toast(`Log in to ${what}`);
+  go("/login?next=" + encodeURIComponent(location.pathname));
 }
 
 async function newPlaylist(){
@@ -277,8 +325,9 @@ async function newPlaylist(){
 
 function showAddPop(btn, payload){
   closePop();
+  if(!ME) return needLogin("make playlists");
   const pop = document.createElement("div"); pop.className="pop";
-  pop.innerHTML = PLAYLISTS.map(p=>`<div data-pid="${p.id}">${esc(p.name)}</div>`).join("") +
+  pop.innerHTML = MINE.map(p=>`<div data-pid="${p.id}">${esc(p.name)}</div>`).join("") +
                   `<div class="new">+ New playlist…</div>`;
   const r = btn.getBoundingClientRect();
   pop.style.top = (window.scrollY + r.bottom + 4) + "px";
@@ -332,16 +381,17 @@ function artistHeader(dirs, title, sub, genre=false){
       <div class="thumb ${genre?'':'round'}">${img ? `<img src="${imgUrl(img)}">` : (genre?"🗂️":"👤")}</div>
       <div class="info">
         <h2>${esc(title)}</h2><div class="sub" style="margin:0">${esc(sub)}</div>
-        <div class="bar">
+        ${ME ? `<div class="bar">
           <button class="btn" id="artFetch">🔍 ${img ? "Re-fetch" : "Fetch"} ${genre?"artwork":"photo"}</button>
           <label class="btn">⬆ Upload ${genre?"artwork":"photo"}<input type="file" id="artUpload" accept="image/jpeg,image/png,image/webp" hidden></label>
         </div>
-        <div class="sub" style="margin:6px 0 0;font-size:11px">Saved as <code>${esc(dirs[0].rel_dir)}/${esc(dirs[0].rel_dir.split("/").pop())}.jpg</code>${dirs.length>1?` (+${dirs.length-1} other genre folder${dirs.length>2?'s':''})`:''}</div>
+        <div class="sub" style="margin:6px 0 0;font-size:11px">Saved as <code>${esc(dirs[0].rel_dir)}/${esc(dirs[0].rel_dir.split("/").pop())}.jpg</code>${dirs.length>1?` (+${dirs.length-1} other genre folder${dirs.length>2?'s':''})`:''}</div>` : ""}
       </div>
     </div>`;
 }
 
 function wireArtistHeader(dirs, rerender){
+  if(!ME) return;
   const done = async msg => { IMGV = Date.now(); await loadArtDirs(); toast(msg); rerender(); };
   $("#artFetch").onclick = async e => {
     e.currentTarget.disabled = true; e.currentTarget.textContent = "Searching Deezer…";
@@ -446,10 +496,11 @@ async function renderLibrary(){
   }
 }
 
-const fetchBar = (n) => `<div class="bar" style="display:flex;gap:10px;align-items:center;margin-bottom:16px;flex-wrap:wrap">
+const fetchBar = (n) => !ME ? "" : `<div class="bar" style="display:flex;gap:10px;align-items:center;margin-bottom:16px;flex-wrap:wrap">
     <button class="btn" id="fetchMissing" ${n?'':'disabled'}>🔍 Fetch missing genre &amp; artist artwork (${n})</button>
     <small class="sub" id="fetchStatus" style="margin:0"></small></div>`;
 function wireFetchBar(){
+  if(!ME) return;
   $("#fetchMissing").onclick = async ()=>{ await post("/api/folder-art/fetch-missing"); pollFetch(); };
   pollFetch();
 }
@@ -508,7 +559,7 @@ async function renderAlbum(folder){
           <button class="btn primary" id="playAll">▶ Play</button>
           <a class="btn" href="/download/album?folder=${encodeURIComponent(folder)}">⬇ Download album (.zip)</a>
           <button class="btn" data-add id="addAll">＋ Add to playlist</button>
-          <label class="btn" title="Saved as cover.jpg in the album folder">⬆ Upload cover<input type="file" id="coverUpload" accept="image/jpeg,image/png,image/webp" hidden></label>
+          ${ME ? `<label class="btn" title="Saved as cover.jpg in the album folder">⬆ Upload cover<input type="file" id="coverUpload" accept="image/jpeg,image/png,image/webp" hidden></label>` : ""}
         </div>
       </div>
     </div>
@@ -525,7 +576,7 @@ async function renderAlbum(folder){
   setTitle(`${al.album} — ${al.artist}`);
   $("#playAll").onclick = ()=>play(tracks, 0);
   $("#addAll").onclick = e=>{ e.stopPropagation(); showAddPop(e.currentTarget, {folder}); };
-  $("#coverUpload").onchange = async e=>{
+  if(ME) $("#coverUpload").onchange = async e=>{
     const f = e.target.files[0]; if(!f) return;
     const fd = new FormData(); fd.append("rel_dir", folder); fd.append("file", f);
     try {
@@ -539,27 +590,40 @@ async function renderAlbum(folder){
 }
 
 // ── Playlists ───────────────────────────────────────────────────────────────
+const lock = p => p.is_public ? "" : ` <span class="pill" title="Only you can see this">🔒 private</span>`;
+const plRow = p => `
+      <div class="row">
+        <a class="main" data-link href="/playlist/${p.id}">🎶 ${esc(p.name)}${lock(p)} <small>· ${p.n_tracks} tracks${p.n_missing?` · ${p.n_missing} unmatched`:''}${p.is_mine?'':` · by ${esc(p.owner)}`}</small></a>
+        <div class="acts"><a class="btn icon" href="/download/playlist/${p.id}" title="Download (.zip)">⬇</a></div>
+      </div>`;
+
 async function renderPlaylists(){
   const nav = NAV;
   await loadPlaylists();
   if(nav !== NAV) return;
   setTitle("Playlists");
-  $("#panel").innerHTML = `
+  const others = PLAYLISTS.filter(p=>!p.is_mine);
+  $("#panel").innerHTML = ME ? `
     <form class="head" id="newForm" style="align-items:center">
       <input class="text" id="newName" placeholder="New playlist name" style="flex:1;min-width:180px">
+      <label class="opts"><label><input type="checkbox" id="newPublic" checked> Public</label></label>
       <button class="btn primary">＋ Create</button>
     </form>
-    ${PLAYLISTS.length ? `<div class="list">${PLAYLISTS.map(p=>`
-      <div class="row">
-        <a class="main" data-link href="/playlist/${p.id}">🎶 ${esc(p.name)} <small>· ${p.n_tracks} tracks${p.n_missing?` · ${p.n_missing} unmatched`:''}</small></a>
-        <div class="acts"><a class="btn icon" href="/download/playlist/${p.id}" title="Download (.zip)">⬇</a></div>
-      </div>`).join("")}</div>`
-    : `<div class="empty">No playlists yet.</div>`}`;
+    <div class="sec-h">Your playlists</div>
+    ${MINE.length ? `<div class="list">${MINE.map(plRow).join("")}</div>` : `<div class="empty">You haven't made any playlists yet.</div>`}
+    <div class="sec-h">Public playlists from others</div>
+    ${others.length ? `<div class="list">${others.map(plRow).join("")}</div>` : `<div class="empty">None yet.</div>`}`
+  : `<div class="card"><a data-link href="/login?next=/playlists">Log in</a> or <a data-link href="/signup">sign up</a> to make your own playlists.</div>
+    <div class="sec-h">Public playlists</div>
+    ${others.length ? `<div class="list">${others.map(plRow).join("")}</div>` : `<div class="empty">No public playlists yet.</div>`}`;
+  if(!ME) return;
   $("#newForm").onsubmit = async e=>{
     e.preventDefault();
     const name = $("#newName").value.trim(); if(!name) return;
-    try { const p = await post("/api/playlists", {name}); EDITING = p.id; go("/playlist/"+p.id); }
-    catch(err){ toast(err.message); }
+    try {
+      const p = await post("/api/playlists", {name, is_public: $("#newPublic").checked});
+      EDITING = p.id; go("/playlist/"+p.id);
+    } catch(err){ toast(err.message); }
   };
 }
 
@@ -568,21 +632,22 @@ async function renderPlaylist(pid){
   await loadPlaylists();
   let pl;
   try { pl = await api(`/api/playlists/${pid}`); }
-  catch(e){ if(nav === NAV) notFound("No such playlist", "/playlists", "Playlists"); return; }
+  catch(e){ if(nav === NAV) notFound("No such playlist (or it's private)", "/playlists", "Playlists"); return; }
   if(nav !== NAV) return;
   setTitle(pl.name);
   const playable = pl.items.filter(i=>i.rel_path);
-  const editing = EDITING===pid;
+  const mine = pl.is_mine, editing = EDITING===pid;
   $("#panel").innerHTML = `${backLink("/playlists", "Playlists")}
     <div class="head" style="align-items:center">
       <div class="info">
-        <h2>🎶 ${esc(pl.name)}</h2>
-        <div class="sub" style="margin:0">${pl.items.length} tracks</div>
+        <h2>🎶 ${esc(pl.name)}${lock(pl)}</h2>
+        <div class="sub" style="margin:0">${pl.items.length} tracks · by <a data-link href="/user/${encodeURIComponent(pl.owner)}">${esc(pl.owner)}</a></div>
         <div class="bar">
           <button class="btn primary" id="playAll" ${playable.length?'':'disabled'}>▶ Play</button>
           <a class="btn" href="/download/playlist/${pid}">⬇ Download (.zip)</a>
-          <button class="btn" id="edit">${editing?'✓ Adding from search':'✏️ Add songs via search'}</button>
-          <button class="btn danger" id="del">🗑 Delete</button>
+          ${mine ? `<button class="btn" id="edit">${editing?'✓ Adding from search':'✏️ Add songs via search'}</button>
+          <button class="btn" id="vis">${pl.is_public ? '🔒 Make private' : '🌐 Make public'}</button>
+          <button class="btn danger" id="del">🗑 Delete</button>` : ""}
         </div>
       </div>
     </div>
@@ -595,21 +660,26 @@ async function renderPlaylist(pid){
         <div class="acts">
           ${it.rel_path?`<button class="btn icon" data-play="${esc(it.rel_path)}" title="Play">▶</button>
           <a class="btn icon" href="/download/track/${enc(it.rel_path)}" title="Download">⬇</a>`:''}
-          <button class="btn icon" data-mv="${it.item_id}:-1" title="Move up">↑</button>
+          ${mine ? `<button class="btn icon" data-mv="${it.item_id}:-1" title="Move up">↑</button>
           <button class="btn icon" data-mv="${it.item_id}:1" title="Move down">↓</button>
-          <button class="btn icon danger" data-rm="${it.item_id}" title="Remove">✕</button>
+          <button class="btn icon danger" data-rm="${it.item_id}" title="Remove">✕</button>` : ""}
         </div>
       </div>`).join("")}</div>`
-    : `<div class="empty">Empty — click “Add songs via search”, or use ＋ on any album.</div>`}`;
+    : `<div class="empty">Empty${mine ? " — click “Add songs via search”, or use ＋ on any album." : "."}</div>`}`;
   $("#playAll").onclick = ()=>play(playable, 0);
+  document.querySelectorAll("[data-play]").forEach(b=>b.onclick=()=>
+    play(playable, playable.findIndex(t=>t.rel_path===b.dataset.play)));
+  if(!mine) return;
   $("#edit").onclick = ()=>{ EDITING = editing ? null : pid; loadPlaylists();
     if(!editing){ $("#fab").classList.add("open"); $("#q").focus(); } renderPlaylist(pid); };
+  $("#vis").onclick = async ()=>{
+    await api(`/api/playlists/${pid}`, {method:"PATCH", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({is_public: !pl.is_public})});
+    toast(pl.is_public ? "Now private — only you can see it" : "Now public"); loadUsers(); renderPlaylist(pid); };
   $("#del").onclick = async ()=>{
     if(!confirm(`Delete playlist “${pl.name}”? (The .m3u is kept as .m3u.deleted)`)) return;
     await post(`/api/playlists/${pid}`, null, "DELETE"); if(EDITING===pid) EDITING=null;
     toast("Playlist deleted"); go("/playlists", true); };
-  document.querySelectorAll("[data-play]").forEach(b=>b.onclick=()=>
-    play(playable, playable.findIndex(t=>t.rel_path===b.dataset.play)));
   document.querySelectorAll("[data-rm]").forEach(b=>b.onclick=async()=>{
     await post(`/api/playlists/${pid}/items/${b.dataset.rm}`, null, "DELETE"); renderPlaylist(pid); });
   document.querySelectorAll("[data-mv]").forEach(b=>b.onclick=async()=>{
@@ -617,10 +687,195 @@ async function renderPlaylist(pid){
     await post(`/api/playlists/${pid}/items/${iid}/move`, {delta:+d}); renderPlaylist(pid); });
 }
 
-function renderStub(name){
-  $("#panel").innerHTML = `<div class="empty">“${esc(name)}” module — scaffolded in the backend,
-    UI arrives in a later iteration.</div>`;
-  setTitle(name);
+// ── Accounts: login / signup / profiles ─────────────────────────────────────
+const ago = ts => { if(!ts) return "never"; const s = Date.now()/1000 - ts;
+  return s < 90 ? "just now" : s < 5400 ? `${Math.round(s/60)} min ago` : s < 129600 ? `${Math.round(s/3600)} h ago`
+       : `${Math.round(s/86400)} days ago`; };
+const gb = b => b >= 1e9 ? `${(b/1e9).toFixed(1)} GB` : `${Math.round((b||0)/1e6)} MB`;
+const statusPill = st => !st ? `<span class="pill">never synced</span>`
+  : `<span class="pill ${st.startsWith("ok")?'ok':st.startsWith("error")?'err':''}">${esc(st)}</span>`;
+
+function renderAuth(mode){
+  const next = new URLSearchParams(location.search).get("next") || "";
+  const signup = mode === "signup";
+  setTitle(signup ? "Sign up" : "Log in");
+  $("#panel").innerHTML = `<h2>${signup ? "Create an account" : "Log in"}</h2>
+    <div class="sub">${signup ? "Pick a username and password. If your username already owns playlists here (made before accounts existed), signing up claims them."
+                              : "Welcome back."}</div>
+    <form class="form" id="authForm">
+      <label>Username<input class="text" id="u" autocomplete="username" required></label>
+      <label>Password<input class="text" id="p" type="password" autocomplete="${signup?'new-password':'current-password'}" required ${signup?'minlength="8"':''}></label>
+      <button class="btn primary">${signup ? "Sign up" : "Log in"}</button>
+      <div class="sub">${signup ? `Already have one? <a data-link href="/login${next?`?next=${encodeURIComponent(next)}`:''}">Log in</a>`
+                                : `New here? <a data-link href="/signup${next?`?next=${encodeURIComponent(next)}`:''}">Sign up</a>`}</div>
+    </form>`;
+  $("#u").focus();
+  $("#authForm").onsubmit = async e=>{
+    e.preventDefault();
+    try {
+      const r = await post(`/api/auth/${signup ? "register" : "login"}`, {username: $("#u").value.trim(), password: $("#p").value});
+      toast(r.claimed ? `Welcome, ${r.username} — your existing playlists are yours` : `Hi, ${r.username}`);
+      history.replaceState({inapp:true}, "", next.startsWith("/") ? next : `/user/${encodeURIComponent(r.username)}`);
+      await refreshSession();
+    } catch(err){ toast(err.message); }
+  };
+}
+
+async function renderUsers(){
+  const nav = NAV;
+  const {users} = await api("/api/users");
+  if(nav !== NAV) return;
+  setTitle("People");
+  $("#panel").innerHTML = `<h2>People</h2><div class="grid" style="margin-top:14px">${users.filter(u=>u.claimed).map(u=>
+    `<a class="tile" data-link href="/user/${encodeURIComponent(u.username)}"><div class="thumb round" style="font-size:44px">${esc(u.username[0].toUpperCase())}</div>
+      <div class="t-name">${esc(u.username)}</div><div class="t-meta">${u.n_public} public playlists · ${u.n_ipods} iPods</div></a>`).join("")}</div>`;
+}
+
+async function renderUser(name){
+  const nav = NAV;
+  let u;
+  try { u = await api("/api/users/" + encodeURIComponent(name)); }
+  catch(e){ if(nav === NAV) notFound(`No user called “${name}”`, "/users", "People"); return; }
+  if(nav !== NAV) return;
+  setTitle(u.username);
+  const err = new URLSearchParams(location.search).get("lastfm_error");
+  if(err) toast("Last.fm: " + err);
+  const fm = u.lastfm_user
+    ? `🎧 Scrobbles to <a href="https://www.last.fm/user/${encodeURIComponent(u.lastfm_user)}" target="_blank" rel="noopener">last.fm/${esc(u.lastfm_user)}</a>
+       ${u.is_me ? `<button class="btn" id="fmOff">Disconnect</button>` : ""}`
+    : u.is_me ? (LASTFM_OK ? `<a class="btn" href="/api/me/lastfm/connect">🎧 Connect Last.fm</a>
+                 <span class="sub" style="margin:0">so your iPod plays scrobble to your account</span>`
+                           : `<span class="sub" style="margin:0">Last.fm isn't configured on this server.</span>`)
+    : "";
+  $("#panel").innerHTML = `
+    <div class="head" style="align-items:center">
+      <div class="avatar">${esc(u.username[0].toUpperCase())}</div>
+      <div class="info">
+        <h2>${esc(u.username)}${u.is_me ? ` <span class="pill">you</span>` : ""}</h2>
+        <div class="sub" style="margin:0">${u.claimed ? `Member since ${new Date(u.member_since*1000).toLocaleDateString()}` : "Unclaimed account — sign up with this name to claim it"}</div>
+        <div class="bar" style="align-items:center">${fm}</div>
+      </div>
+    </div>
+    <div class="sec-h">iPods</div>
+    ${u.ipods.length ? `<div class="list">${u.ipods.map(i=>`<div class="row"><div class="main">📟 ${esc(i.name)} <small>· last synced ${ago(i.last_sync)}</small></div></div>`).join("")}</div>`
+                     : `<div class="empty" style="padding:14px">No iPods linked.</div>`}
+    ${u.is_me ? `<a class="btn" data-link href="/ipod">Manage my iPods →</a>` : ""}
+    <div class="sec-h">${u.is_me ? "Your playlists" : "Public playlists"}</div>
+    ${u.playlists.length ? `<div class="list">${u.playlists.map(p=>plRow({...p, is_mine:true, owner:u.username})).join("")}</div>`
+                         : `<div class="empty" style="padding:14px">None yet.</div>`}`;
+  if(u.is_me && u.lastfm_user) $("#fmOff").onclick = async ()=>{
+    await post("/api/me/lastfm", null, "DELETE"); await loadMe(); renderUser(name); };
+}
+
+// ── My iPod: link detected iPods, edit each one's saved sync profile ─────────
+function loginPrompt(what){
+  $("#panel").innerHTML = `<div class="empty"><a data-link href="/login?next=${encodeURIComponent(location.pathname)}">Log in</a>
+    to ${what}.</div>`;
+}
+
+async function renderIpods(){
+  setTitle("My iPod");
+  if(!ME) return loginPrompt("link your iPod and choose what syncs to it");
+  const nav = NAV;
+  const [data] = await Promise.all([api("/api/ipods"), loadPlaylists()]);
+  if(nav !== NAV) return;
+  const meta = m => [m.model, m.rockbox && `Rockbox ${m.rockbox}`, m.capacity, m.free && `${m.free} free`].filter(Boolean).map(esc).join(" · ");
+  const unclaimed = data.unclaimed.map(u=>`
+    <div class="card">
+      <h3>📟 New iPod detected</h3>
+      <div class="sub" style="margin:0 0 10px">${meta(u.metadata) || "Unknown model"} · seen ${ago(u.last_seen)} · <code>${esc(u.signature)}</code></div>
+      <form class="bar" data-link-sig="${esc(u.signature)}" style="display:flex;gap:8px;flex-wrap:wrap">
+        <input class="text" name="name" placeholder="Give it a name, e.g. ${esc(ME.username)}'s iPod" required style="flex:1;min-width:200px">
+        <button class="btn primary">Link to my account</button>
+      </form>
+    </div>`).join("");
+  const others = PLAYLISTS.filter(p=>!p.is_mine);
+  const card = ip => {
+    const s = ip.sync, sum = ip.summary, st = ip.host?.state;
+    const live = st && Date.now()/1000 - (ip.last_seen||0) < 900;
+    const pick = (list, own) => list.map(p=>`<label><input type="checkbox" name="pl" value="${p.id}" ${s.playlists.includes(p.id)?'checked':''} ${own && s.own_playlists ? 'disabled checked' : ''}>
+        ${esc(p.name)}${p.is_mine ? lock(p) : ` <small class="sub">by ${esc(p.owner)}</small>`}</label>`).join("");
+    return `<div class="card" data-ipod="${ip.id}">
+      <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap">
+        <div><h3>📟 ${esc(ip.name)}</h3>
+          <div class="sub" style="margin:0">${meta(ip.metadata) || "Unknown model"}</div></div>
+        <div style="text-align:right">${live ? `<span class="pill ok">● connected · ${esc(st)}</span><br>` : ""}
+          <span class="sub" style="margin:0;font-size:12px">Last sync ${ago(ip.last_sync)}</span> ${statusPill(ip.last_status)}</div>
+      </div>
+      <div class="sub" style="margin:10px 0 0" data-sum>Will receive <b>${sum.albums}</b> albums · ${sum.tracks} tracks · ${gb(sum.bytes)} · ${sum.playlists} playlists</div>
+      <form class="settings">
+        <div><b>Name</b><input class="text" name="name" value="${esc(ip.name)}" style="max-width:300px"></div>
+        <div><b>Folder layout on the iPod</b><div class="opts">
+          <label><input type="radio" name="layout" value="genre" ${ip.layout==='genre'?'checked':''}> Like the server: 0_GENRE / Artist / Album</label>
+          <label><input type="radio" name="layout" value="flat" ${ip.layout==='flat'?'checked':''}> Flat: Artist / Album</label></div></div>
+        <div><b>Music</b><div class="opts">
+          <label><input type="radio" name="music" value="all" ${s.music==='all'?'checked':''}> Whole library</label>
+          <label><input type="radio" name="music" value="selected" ${s.music==='selected'?'checked':''}> Only these genres, plus albums in synced playlists:</label></div>
+          <div class="opts" data-genres style="margin-top:6px;${s.music==='selected'?'':'opacity:.45'}">${data.genres.map(g=>`<label><input type="checkbox" name="genre" value="${esc(g.rel_dir)}" ${s.genres.includes(g.rel_dir)?'checked':''} ${s.music==='selected'?'':'disabled'}> ${esc(g.genre)}</label>`).join("")}</div></div>
+        <div><b>Playlists</b><div class="opts">
+          <label><input type="checkbox" name="own" ${s.own_playlists?'checked':''}> All my playlists (new ones included)</label></div>
+          <div class="opts" style="margin-top:6px">${pick(MINE, true)}${pick(others, false)}</div></div>
+        <div><b>Scrobbling</b><div class="opts">
+          <label><input type="checkbox" name="scrobble" ${s.scrobble?'checked':''} ${ME.lastfm_user?'':'disabled'}>
+          ${ME.lastfm_user ? `Scrobble plays to last.fm/${esc(ME.lastfm_user)}` : `Connect Last.fm on <a data-link href="/user/${encodeURIComponent(ME.username)}">your profile</a> to scrobble`}</label></div></div>
+        <div class="bar" style="display:flex;gap:8px"><button class="btn primary">Save</button>
+          <button class="btn danger" type="button" data-unlink>Unlink</button></div>
+      </form>
+    </div>`;
+  };
+  $("#panel").innerHTML = `<h2>My iPod</h2>
+    <div class="sub">Plug an iPod into the server to sync it. These settings are saved here and used every time it connects.</div>
+    ${unclaimed}
+    ${data.ipods.map(card).join("")}
+    ${!data.ipods.length && !data.unclaimed.length ? `<div class="empty">No iPods yet. Plug yours into the server — it'll appear here to link.</div>` : ""}`;
+
+  document.querySelectorAll("[data-link-sig]").forEach(f=>f.onsubmit = async e=>{
+    e.preventDefault();
+    try { await post("/api/ipods", {signature: f.dataset.linkSig, name: f.name.value});
+          toast("Linked — it'll sync with these settings next time it connects"); loadUsers(); renderIpods(); }
+    catch(err){ toast(err.message); }
+  });
+  document.querySelectorAll("[data-ipod]").forEach(c=>{
+    const id = +c.dataset.ipod, f = c.querySelector("form");
+    const syncGenres = ()=>{ const sel = f.music.value === "selected";
+      c.querySelector("[data-genres]").style.opacity = sel ? 1 : .45;
+      f.querySelectorAll("[name=genre]").forEach(x=>x.disabled = !sel); };
+    const syncOwn = ()=>MINE.forEach(p=>{ const x = f.querySelector(`[name=pl][value="${p.id}"]`);
+      if(x){ x.disabled = f.own.checked; if(f.own.checked) x.checked = true; } });
+    f.querySelectorAll("[name=music]").forEach(r=>r.onchange = syncGenres);
+    f.own.onchange = syncOwn;
+    f.onsubmit = async e=>{
+      e.preventDefault();
+      const checked = n => [...f.querySelectorAll(`[name=${n}]:checked`)];
+      const body = {name: f.name.value, layout: f.layout.value, sync: {
+        music: f.music.value, genres: checked("genre").map(x=>x.value), own_playlists: f.own.checked,
+        playlists: checked("pl").filter(x=>!x.disabled).map(x=>+x.value), scrobble: f.scrobble.checked}};
+      try {
+        const r = await api(`/api/ipods/${id}`, {method:"PATCH", headers:{"Content-Type":"application/json"}, body: JSON.stringify(body)});
+        c.querySelector("[data-sum]").innerHTML = `Will receive <b>${r.summary.albums}</b> albums · ${r.summary.tracks} tracks · ${gb(r.summary.bytes)} · ${r.summary.playlists} playlists`;
+        toast("Saved — applies next time it connects");
+      } catch(err){ toast(err.message); }
+    };
+    c.querySelector("[data-unlink]").onclick = async ()=>{
+      if(!confirm("Unlink this iPod? It stops syncing until someone links it again.")) return;
+      await post(`/api/ipods/${id}`, null, "DELETE"); loadUsers(); renderIpods(); };
+  });
+}
+
+// ── Activity: the logged-in user's iPod + playlist history ──────────────────
+async function renderActivity(){
+  setTitle("Activity");
+  if(!ME) return loginPrompt("see your iPod activity");
+  const nav = NAV;
+  const {activity} = await api("/api/activity");
+  if(nav !== NAV) return;
+  const icon = {sync:"🔄", connect:"🔌", link:"🔗", playlist:"🎶"};
+  $("#panel").innerHTML = `<h2>Activity</h2>
+    ${activity.length ? `<div class="list">${activity.map(a=>`<div class="row">
+      <div class="num" style="width:auto">${icon[a.kind]||"•"}</div>
+      <div class="main">${esc(a.message)}${a.detail?.status && a.detail.status!=="ok" ? ` ${statusPill(a.detail.status)}` : ""}</div>
+      <small class="r-genre">${new Date(a.ts*1000).toLocaleString()}</small></div>`).join("")}</div>`
+    : `<div class="empty">Nothing yet — link an iPod on the My iPod tab and plug it in.</div>`}`;
 }
 
 // ── Router: real URLs, Spotify-style prefixes ───────────────────────────────
@@ -657,6 +912,7 @@ window.addEventListener("popstate", route);
 const TAB_OF = {library:"library", artists:"library", albums:"library", artist:"library",
                 album:"library", playlists:"playlists", playlist:"playlists",
                 activity:"activity", ipod:"ipod"};
+// (user / users / login / signup pages don't belong to a tab)
 
 function route(){
   NAV++;
@@ -673,8 +929,12 @@ function route(){
     case "album":     return renderAlbum(rest.join("/"));
     case "playlists": return renderPlaylists();
     case "playlist":  return renderPlaylist(+rest[0]);
-    case "activity":  return renderStub("Activity");
-    case "ipod":      return renderStub("My iPod");
+    case "activity":  return renderActivity();
+    case "ipod":      return renderIpods();
+    case "user":      return renderUser(rest.join("/"));
+    case "users":     return renderUsers();
+    case "login":     return renderAuth("login");
+    case "signup":    return renderAuth("signup");
     default:          return notFound("Page not found", "/library", "Library");
   }
 }
@@ -711,6 +971,7 @@ $("#res").onclick = e=>{
 };
 
 (async ()=>{
+  await loadMe();
   loadUsers(); loadPlaylists();
   const s = await loadStats();
   route();

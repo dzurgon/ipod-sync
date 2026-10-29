@@ -22,6 +22,14 @@ GENRE_ART_SOURCES = {
     **json.loads(os.environ.get("AQUARIA_GENRE_ART", "{}")),
 }
 
+# ── Accounts / integrations (secrets come from the environment, never the repo) ──
+SESSION_DAYS = int(os.environ.get("AQUARIA_SESSION_DAYS", "30"))
+# Shared secret the host-side ipod-sync script sends as X-Aquaria-Token. Unset = host API off.
+HOST_TOKEN = os.environ.get("AQUARIA_HOST_TOKEN", "")
+# Last.fm API account (https://www.last.fm/api/account/create) — enables "Connect Last.fm".
+LASTFM_API_KEY = os.environ.get("LASTFM_API_KEY", "")
+LASTFM_API_SECRET = os.environ.get("LASTFM_API_SECRET", "")
+
 # Owner for playlists imported from PLAYLIST_DIR / created before per-user login exists.
 DEFAULT_USER = os.environ.get("AQUARIA_DEFAULT_USER", "jimin")
 

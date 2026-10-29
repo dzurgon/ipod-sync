@@ -29,7 +29,42 @@ for the full design; this is the quick start.
   logo). Fetch one, fetch all missing, or upload by hand from the folder's page.
 - Album covers: "Upload cover" on any album page writes `cover.jpg` into the album
   folder (converted to a baseline JPEG ≤1000px so Rockbox can show it).
-- `tests/` — 31 tests (parser edge cases, engine, playlist + download API).
+- `tests/` — 44 tests (parser edge cases, engine, playlist + download API).
+
+## Accounts, playlists and iPods
+
+- **Accounts**: username + password (scrypt), 30-day session cookie. Guests can
+  browse, play and download the library and public playlists; anything that writes
+  needs a login. A user that existed before accounts (e.g. `jimin`, owner of the
+  imported `Playlists/*.m3u`) is claimed by signing up with that name.
+- **Profiles**: `/user/<name>` shows a user's public playlists and iPods; your own
+  profile also shows private playlists and "Connect Last.fm".
+- **Playlists** are public or private, unique per user, mirrored to
+  `Playlists/<user>/<name>.m3u` (legacy root-level files stay with the default user).
+- **iPods** (My iPod tab): plug one into the server and it appears as "New iPod
+  detected" — link it to your account, then choose its saved sync profile:
+  whole library or selected genres (+ albums in synced playlists), `0_GENRE/Artist/Album`
+  or flat `Artist/Album` layout, which playlists (yours and others' public ones), and
+  scrobbling to your own Last.fm. Every connect syncs that profile and reports back to
+  the iPod card and the Activity tab.
+
+### Host side (udev → `ipod-sync.sh`)
+
+`server/scripts/aquaria_sync.py` identifies the iPod (USB serial, else a
+`.aquaria/id` marker on it), asks Aquaria for its plan, stages it as a symlink tree and
+`rsync --copy-links` mirrors that onto the iPod; playlists go to `/Playlists` with
+absolute `/FLAC/...` paths. Unlinked iPods are only registered (no sync). If Aquaria is
+unreachable, the legacy full-library mirror runs instead.
+
+```bash
+# ~/docker/aquaria/.env (mode 600, never committed)
+AQUARIA_HOST_TOKEN=<random, e.g. openssl rand -hex 32>
+LASTFM_API_KEY=...        # same Last.fm API account as /etc/ipod-sync/config.env
+LASTFM_API_SECRET=...
+
+# then install the host scripts + udev rule and share the token with them
+sudo bash ~/code/ipod-sync/server/scripts/install-host.sh
+```
 
 ## Run locally (dev)
 

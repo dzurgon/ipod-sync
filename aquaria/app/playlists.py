@@ -96,10 +96,11 @@ def ipod_path(conn, track_id: int, layout: str = "genre") -> str | None:
 
 # ── Write path: CRUD + .m3u round-trip ───────────────────────────────────────
 #
-# The DB is what the UI edits; each playlist is mirrored to <PLAYLIST_DIR>/<name>.m3u
-# (one rel_path per line, relative to MUSIC_ROOT) so the existing ipod-sync.sh push
-# keeps working unchanged. Files edited outside Aquaria (e.g. pulled off the iPod)
-# are re-imported on the next sync_dir() when their mtime is newer than the DB copy.
+# The DB is what the UI edits; each playlist is mirrored to an .m3u (one rel_path per
+# line, relative to MUSIC_ROOT): <PLAYLIST_DIR>/<username>/<name>.m3u for playlists made
+# in Aquaria, while legacy files in the PLAYLIST_DIR root stay owned by the default user.
+# Files edited outside Aquaria are re-imported on the next sync_dir() when their mtime is
+# newer than the DB copy. Playlists are public (is_global=1) or private to their owner.
 
 
 def safe_name(name: str) -> str:
@@ -143,6 +144,7 @@ def write_file(conn, playlist_id: int) -> None:
         (playlist_id,),
     )]
     path = Path(pl["file_path"])
+    path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".m3u.tmp")
     tmp.write_text("#EXTM3U\n" + "".join(l + "\n" for l in lines), encoding="utf-8")
     tmp.replace(path)
@@ -152,11 +154,19 @@ def write_file(conn, playlist_id: int) -> None:
 
 
 def sync_dir(conn, playlist_dir: Path, owner_id: int) -> dict:
-    """Import new .m3u files and reload ones changed on disk since we last wrote them."""
+    """Import new .m3u files and reload ones changed on disk since we last wrote them.
+
+    Root-level files belong to owner_id (the default user); files in a subfolder named
+    after an existing user belong to that user."""
     imported = reloaded = 0
     if not playlist_dir.is_dir():
         return {"imported": 0, "reloaded": 0}
-    for path in sorted(playlist_dir.glob("*.m3u")):
+    owned = [(p, owner_id) for p in sorted(playlist_dir.glob("*.m3u"))]
+    for sub in sorted(d for d in playlist_dir.iterdir() if d.is_dir()):
+        u = conn.execute("SELECT id FROM users WHERE username=? COLLATE NOCASE", (sub.name,)).fetchone()
+        if u:
+            owned += [(p, u["id"]) for p in sorted(sub.glob("*.m3u"))]
+    for path, uid in owned:
         mtime = path.stat().st_mtime
         row = conn.execute("SELECT id, updated_at FROM playlists WHERE file_path=?",
                            (str(path),)).fetchone()
@@ -164,7 +174,7 @@ def sync_dir(conn, playlist_dir: Path, owner_id: int) -> dict:
             cur = conn.execute(
                 "INSERT INTO playlists(user_id, name, is_global, file_path, created_at, updated_at) "
                 "VALUES (?,?,1,?,?,?)",
-                (owner_id, path.stem, str(path), mtime, mtime),
+                (uid, path.stem, str(path), mtime, mtime),
             )
             _set_items(conn, cur.lastrowid, _read_lines(path))
             imported += 1
@@ -187,23 +197,30 @@ def sync_dir(conn, playlist_dir: Path, owner_id: int) -> dict:
     return {"imported": imported, "reloaded": reloaded}
 
 
-def list_playlists(conn) -> list[dict]:
+def list_playlists(conn, viewer_id: int | None = None) -> list[dict]:
+    """Public playlists plus the viewer's own private ones."""
     rows = conn.execute("""
-        SELECT p.id, p.name, p.updated_at, u.username AS owner,
+        SELECT p.id, p.name, p.updated_at, u.username AS owner, p.user_id = ? AS is_mine,
+               p.is_global AS is_public,
                COUNT(i.id) AS n_tracks,
                SUM(CASE WHEN i.id IS NOT NULL AND i.track_id IS NULL THEN 1 ELSE 0 END) AS n_missing
         FROM playlists p
         JOIN users u ON u.id = p.user_id
         LEFT JOIN playlist_items i ON i.playlist_id = p.id
+        WHERE p.is_global = 1 OR p.user_id = ?
         GROUP BY p.id ORDER BY LOWER(p.name)
-    """).fetchall()
-    return [dict(r) for r in rows]
+    """, (viewer_id or -1, viewer_id or -1)).fetchall()
+    return [dict(r) | {"is_mine": bool(r["is_mine"]), "is_public": bool(r["is_public"])}
+            for r in rows]
 
 
-def get_playlist(conn, playlist_id: int) -> dict | None:
-    pl = conn.execute("SELECT id, name, updated_at FROM playlists WHERE id=?",
-                      (playlist_id,)).fetchone()
-    if not pl:
+def get_playlist(conn, playlist_id: int, viewer_id: int | None = None) -> dict | None:
+    """The playlist with its items, or None if it doesn't exist or is private to someone else."""
+    pl = conn.execute(
+        "SELECT p.id, p.name, p.updated_at, p.user_id, p.is_global, u.username AS owner "
+        "FROM playlists p JOIN users u ON u.id = p.user_id WHERE p.id=?",
+        (playlist_id,)).fetchone()
+    if not pl or (not pl["is_global"] and pl["user_id"] != viewer_id):
         return None
     items = conn.execute("""
         SELECT i.id AS item_id, i.position, i.raw_line, i.resolved,
@@ -211,26 +228,38 @@ def get_playlist(conn, playlist_id: int) -> dict | None:
         FROM playlist_items i LEFT JOIN tracks t ON t.id = i.track_id
         WHERE i.playlist_id=? ORDER BY i.position
     """, (playlist_id,)).fetchall()
-    return {**dict(pl), "items": [dict(i) for i in items]}
+    return {**dict(pl), "is_public": bool(pl["is_global"]), "is_mine": pl["user_id"] == viewer_id,
+            "items": [dict(i) for i in items]}
 
 
-def create_playlist(conn, playlist_dir: Path, owner_id: int, name: str) -> int:
+def create_playlist(conn, playlist_dir: Path, owner_id: int, name: str,
+                    is_public: bool = True, lines: list[str] | None = None) -> int:
+    """New playlist for owner_id at <playlist_dir>/<username>/<name>.m3u (names unique per user)."""
     name = safe_name(name)
     if not name:
         raise ValueError("playlist name is empty or invalid")
-    path = playlist_dir / f"{name}.m3u"
-    if path.exists() or conn.execute("SELECT 1 FROM playlists WHERE LOWER(name)=LOWER(?)",
-                                     (name,)).fetchone():
-        raise FileExistsError(f"playlist '{name}' already exists")
+    owner = conn.execute("SELECT username FROM users WHERE id=?", (owner_id,)).fetchone()
+    path = playlist_dir / owner["username"] / f"{name}.m3u"
+    if path.exists() or conn.execute(
+            "SELECT 1 FROM playlists WHERE user_id=? AND LOWER(name)=LOWER(?)",
+            (owner_id, name)).fetchone():
+        raise FileExistsError(f"you already have a playlist called '{name}'")
     now = time.time()
     cur = conn.execute(
         "INSERT INTO playlists(user_id, name, is_global, file_path, created_at, updated_at) "
-        "VALUES (?,?,1,?,?,?)",
-        (owner_id, name, str(path), now, now),
+        "VALUES (?,?,?,?,?,?)",
+        (owner_id, name, int(is_public), str(path), now, now),
     )
+    if lines:
+        _set_items(conn, cur.lastrowid, lines)
     write_file(conn, cur.lastrowid)
     conn.commit()
     return cur.lastrowid
+
+
+def set_public(conn, playlist_id: int, is_public: bool) -> None:
+    conn.execute("UPDATE playlists SET is_global=? WHERE id=?", (int(is_public), playlist_id))
+    conn.commit()
 
 
 def add_tracks(conn, playlist_id: int, rel_paths: list[str]) -> int:

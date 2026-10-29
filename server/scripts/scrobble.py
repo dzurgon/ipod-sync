@@ -17,6 +17,9 @@ Usage:
 
 First-time auth:
   python3 scrobble.py --auth --config /etc/ipod-sync/config.env
+
+Per-user (Aquaria) mode: ipod-sync.sh passes --username <owner's Last.fm name> and the
+owner's session key in $LASTFM_SESSION_KEY_OVERRIDE (env, so it never shows in `ps`).
 """
 
 import argparse
@@ -274,13 +277,16 @@ def main() -> int:
                         help="Run authentication only and save session key, then exit")
     parser.add_argument("--dry-run", action="store_true",
                         help="Parse log and show what would be scrobbled, without submitting")
+    parser.add_argument("--username", default="",
+                        help="Scrobble as this Last.fm user (session key from $LASTFM_SESSION_KEY_OVERRIDE)")
     args = parser.parse_args()
 
     cfg = load_config(args.config)
 
     api_key    = cfg.get("LASTFM_API_KEY", "")
     api_secret = cfg.get("LASTFM_API_SECRET", "")
-    username   = cfg.get("LASTFM_USERNAME", "")
+    username   = args.username or cfg.get("LASTFM_USERNAME", "")
+    session_override = os.environ.get("LASTFM_SESSION_KEY_OVERRIDE", "") if args.username else ""
 
     if not all([api_key, api_secret, username]):
         print("ERROR: LASTFM_API_KEY, LASTFM_API_SECRET, LASTFM_USERNAME must be set in config.",
@@ -321,7 +327,8 @@ def main() -> int:
         print("Dry-run mode — not submitting.")
         return 0
 
-    session_key = get_session_key(api_key, api_secret, username, session_file)
+    session_key = session_override or get_session_key(api_key, api_secret, username, session_file)
+    print(f"Scrobbling as Last.fm user: {username}")
 
     submitted_raw_lines: set[str] = set()
     total_accepted = 0

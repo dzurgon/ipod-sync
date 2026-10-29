@@ -2,38 +2,29 @@
 Aquaria Music Manager — FastAPI backend.
 
 Engine: scan → index → the Library projections + smart search + playlist resolution.
-This iteration adds: browse into artists/albums, streaming + download (single
-track, whole album or playlist as a .zip), and the playlist write-path mirrored
-to PLAYLIST_DIR/*.m3u. Users / iPods / activity are still scaffolded.
+Browse/stream/download the library, per-user public/private playlists mirrored to
+.m3u files, folder artwork, accounts (accounts.py) and iPod sync profiles + the host
+sync API (ipods.py). Guests can read; writes need a logged-in user.
 """
 
 from __future__ import annotations
 
-import json
 import threading
-import time
 import urllib.parse
 import zipfile
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import config, db, folder_art, indexer, library, playlists
+from . import accounts, config, folder_art, indexer, ipods, library, playlists, state
+from .accounts import current_user, require_user
 
-# Use the configured DB path when its directory exists (the /data volume in
-# Docker); otherwise fall back to a local file for dev runs outside a container.
-if config.DB_PATH.parent.exists():
-    _db_path = config.DB_PATH
-else:
-    _db_path = "aquaria.db"
-conn = db.connect(_db_path)
-
-# One shared connection; serialise writers (scan, playlist edits) against each other.
-write_lock = threading.Lock()
+conn = state.conn
+write_lock = state.write_lock
 
 STATIC = Path(__file__).parent / "static"
 
@@ -53,7 +44,9 @@ async def lifespan(_app):
     yield
 
 
-app = FastAPI(title="Aquaria Music Manager", version="0.3.0", lifespan=lifespan)
+app = FastAPI(title="Aquaria Music Manager", version="0.4.0", lifespan=lifespan)
+app.include_router(accounts.router)
+app.include_router(ipods.router)
 
 
 # ── Library ──────────────────────────────────────────────────────────────────
@@ -187,8 +180,8 @@ def download_album(folder: str):
 
 
 @app.get("/download/playlist/{playlist_id}")
-def download_playlist(playlist_id: int):
-    pl = playlists.get_playlist(conn, playlist_id)
+def download_playlist(playlist_id: int, user: dict | None = Depends(current_user)):
+    pl = playlists.get_playlist(conn, playlist_id, user and user["id"])
     if not pl:
         raise HTTPException(404, "playlist not found")
     entries, m3u = [], ["#EXTM3U"]
@@ -210,6 +203,11 @@ def download_playlist(playlist_id: int):
 
 class NewPlaylist(BaseModel):
     name: str
+    is_public: bool = True
+
+
+class PlaylistPatch(BaseModel):
+    is_public: bool
 
 
 class AddTracks(BaseModel):
@@ -221,38 +219,56 @@ class MoveItem(BaseModel):
     delta: int
 
 
-def _owner_id() -> int:
-    return playlists.ensure_user(conn, config.DEFAULT_USER)
+def _viewer_id(user: dict | None) -> int | None:
+    return user["id"] if user else None
+
+
+def _own_playlist(playlist_id: int, user: dict) -> dict:
+    pl = playlists.get_playlist(conn, playlist_id, user["id"])
+    if not pl:
+        raise HTTPException(404, "playlist not found")
+    if not pl["is_mine"]:
+        raise HTTPException(403, "only the playlist's owner can change it")
+    return pl
 
 
 @app.get("/api/playlists")
-def list_playlists():
-    return {"playlists": playlists.list_playlists(conn)}
+def list_playlists(user: dict | None = Depends(current_user)):
+    return {"playlists": playlists.list_playlists(conn, _viewer_id(user))}
 
 
 @app.post("/api/playlists")
-def create_playlist(body: NewPlaylist):
+def create_playlist(body: NewPlaylist, user: dict = Depends(require_user)):
     with write_lock:
         try:
-            pid = playlists.create_playlist(conn, config.PLAYLIST_DIR, _owner_id(), body.name)
+            pid = playlists.create_playlist(conn, config.PLAYLIST_DIR, user["id"], body.name,
+                                            is_public=body.is_public)
         except ValueError as e:
             raise HTTPException(400, str(e))
         except FileExistsError as e:
             raise HTTPException(409, str(e))
-    return playlists.get_playlist(conn, pid)
+    return playlists.get_playlist(conn, pid, user["id"])
 
 
 @app.get("/api/playlists/{playlist_id}")
-def get_playlist(playlist_id: int):
-    pl = playlists.get_playlist(conn, playlist_id)
+def get_playlist(playlist_id: int, user: dict | None = Depends(current_user)):
+    pl = playlists.get_playlist(conn, playlist_id, _viewer_id(user))
     if not pl:
         raise HTTPException(404, "playlist not found")
     return pl
 
 
+@app.patch("/api/playlists/{playlist_id}")
+def patch_playlist(playlist_id: int, body: PlaylistPatch, user: dict = Depends(require_user)):
+    _own_playlist(playlist_id, user)
+    with write_lock:
+        playlists.set_public(conn, playlist_id, body.is_public)
+    return playlists.get_playlist(conn, playlist_id, user["id"])
+
+
 @app.post("/api/playlists/{playlist_id}/tracks")
-def add_tracks(playlist_id: int, body: AddTracks):
-    get_playlist(playlist_id)
+def add_tracks(playlist_id: int, body: AddTracks, user: dict = Depends(require_user)):
+    _own_playlist(playlist_id, user)
     rels = list(body.rel_paths)
     if body.folder:
         rels += [t["rel_path"] for t in library.album_tracks(conn, body.folder)]
@@ -262,22 +278,24 @@ def add_tracks(playlist_id: int, body: AddTracks):
 
 
 @app.delete("/api/playlists/{playlist_id}/items/{item_id}")
-def remove_item(playlist_id: int, item_id: int):
+def remove_item(playlist_id: int, item_id: int, user: dict = Depends(require_user)):
+    _own_playlist(playlist_id, user)
     with write_lock:
         playlists.remove_item(conn, playlist_id, item_id)
     return {"ok": True}
 
 
 @app.post("/api/playlists/{playlist_id}/items/{item_id}/move")
-def move_item(playlist_id: int, item_id: int, body: MoveItem):
+def move_item(playlist_id: int, item_id: int, body: MoveItem, user: dict = Depends(require_user)):
+    _own_playlist(playlist_id, user)
     with write_lock:
         playlists.move_item(conn, playlist_id, item_id, body.delta)
     return {"ok": True}
 
 
 @app.delete("/api/playlists/{playlist_id}")
-def delete_playlist(playlist_id: int):
-    get_playlist(playlist_id)
+def delete_playlist(playlist_id: int, user: dict = Depends(require_user)):
+    _own_playlist(playlist_id, user)
     with write_lock:
         playlists.delete_playlist(conn, playlist_id)
     return {"ok": True}
@@ -300,7 +318,7 @@ def folder_art_list():
     }
 
 
-@app.post("/api/folder-art/fetch")
+@app.post("/api/folder-art/fetch", dependencies=[Depends(require_user)])
 def folder_art_fetch(body: FolderRef):
     if (folder_art.kind_of(conn, body.rel_dir) or ("",))[0] == "album":
         raise HTTPException(400, "album covers come from beets (fetchart) — upload one instead")
@@ -316,7 +334,7 @@ def folder_art_fetch(body: FolderRef):
     return {"image": img}
 
 
-@app.post("/api/folder-art/fetch-missing")
+@app.post("/api/folder-art/fetch-missing", dependencies=[Depends(require_user)])
 def folder_art_fetch_missing():
     return folder_art.start_fetch_missing(conn, config.MUSIC_ROOT, write_lock)
 
@@ -326,7 +344,7 @@ def folder_art_fetch_status():
     return folder_art.JOB
 
 
-@app.post("/api/folder-art/upload")
+@app.post("/api/folder-art/upload", dependencies=[Depends(require_user)])
 async def folder_art_upload(rel_dir: str = Form(...), file: UploadFile = File(...)):
     """Genre/artist folders -> <Folder>/<Folder>.<ext>; album folders -> cover.jpg."""
     data = await file.read(folder_art.MAX_BYTES + 1)
@@ -349,41 +367,9 @@ async def folder_art_upload(rel_dir: str = Form(...), file: UploadFile = File(..
 
 # ── Scan ─────────────────────────────────────────────────────────────────────
 
-@app.post("/api/scan")
+@app.post("/api/scan", dependencies=[Depends(require_user)])
 def rescan():
     return _scan_and_sync()
-
-
-# ── Users (scaffold) ─────────────────────────────────────────────────────────
-
-@app.get("/api/users")
-def list_users():
-    rows = conn.execute("SELECT id, username, settings FROM users ORDER BY username").fetchall()
-    users = []
-    for u in rows:
-        ipods = conn.execute(
-            "SELECT id, name, signature, layout, last_seen FROM ipods WHERE user_id=?",
-            (u["id"],),
-        ).fetchall()
-        users.append({
-            "id": u["id"], "username": u["username"],
-            "settings": json.loads(u["settings"] or "{}"),
-            "ipods": [dict(i) for i in ipods],
-        })
-    return {"users": users, "default_backdrop": config.DEFAULT_BACKDROP}
-
-
-@app.post("/api/users")
-def create_user(username: str):
-    try:
-        cur = conn.execute(
-            "INSERT INTO users(username, settings, created_at) VALUES (?,?,?)",
-            (username, "{}", time.time()),
-        )
-        conn.commit()
-    except Exception as e:
-        raise HTTPException(400, str(e))
-    return {"id": cur.lastrowid, "username": username}
 
 
 # ── Frontend (single-file UI) ────────────────────────────────────────────────
@@ -396,10 +382,10 @@ def index():
     return (STATIC / "index.html").read_text()
 
 
-# Page URLs (/album/<folder>, /artist/<name>, /library/<path>, /playlist/<id>, …) are
+# Page URLs (/album/<folder>, /artist/<name>, /user/<name>, /playlist/<id>, …) are
 # routed client-side; the server answers each with the same single-page app.
 PAGES = ("library", "artists", "albums", "artist", "album", "playlists", "playlist",
-         "activity", "ipod")
+         "activity", "ipod", "user", "users", "login", "signup")
 for _page in PAGES:
     app.add_api_route(f"/{_page}", index, response_class=HTMLResponse, include_in_schema=False)
     app.add_api_route(f"/{_page}/{{rest:path}}", index, response_class=HTMLResponse,

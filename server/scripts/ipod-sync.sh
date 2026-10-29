@@ -5,10 +5,15 @@
 #
 # What it does (in order):
 #   1. Wait for iPod to be fully mounted
-#   2. rsync music library → iPod (server is authoritative)
-#   3. Sync playlists: push server→iPod, pull any new ones iPod→server
-#   4. Parse .scrobbler.log → submit to Last.fm (via scrobble.py)
-#   5. Log a timestamped summary
+#   2. Ask Aquaria (the web app) which iPod this is and what it should hold:
+#        linked     → sync that iPod's saved plan (music selection, layout, playlists,
+#                     owner's Last.fm) — see aquaria_sync.py / aquaria/app/ipods.py
+#        not linked → register it so its owner can link it in the web UI; no sync
+#        unreachable / not configured → legacy mode (steps 3–4: mirror everything)
+#   3. rsync music library → iPod (server is authoritative)
+#   4. Sync playlists: push server→iPod, pull any new ones iPod→server
+#   5. Parse .scrobbler.log → submit to Last.fm (via scrobble.py)
+#   6. Log a timestamped summary
 
 set -euo pipefail
 
@@ -30,6 +35,11 @@ EVENT_SOURCE="sync"
 find "$LOG_DIR" -name 'ipod-sync-*.log' | sort | head -n -30 | xargs -r rm --
 
 SCROBBLE_SCRIPT="/usr/local/lib/ipod-sync/scrobble.py"
+AQUARIA_SYNC="/usr/local/lib/ipod-sync/aquaria_sync.py"
+AQUARIA_ENV="${AQUARIA_ENV:-/etc/ipod-sync/aquaria.env}"   # AQUARIA_URL + AQUARIA_HOST_TOKEN
+# --max-delete safety cap for the music rsync. Shrinking what an iPod holds (e.g.
+# "whole library" → a few genres) can legitimately exceed it; raise it for that sync.
+IPOD_MAX_DELETE="${IPOD_MAX_DELETE:-200}"
 
 # ── Shared helpers (log/warn/die/section, emit_event, require_healthy_mount) ────
 LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib"
@@ -86,12 +96,119 @@ IPOD_SCROBBLER_LOG="${IPOD_MOUNT}/.scrobbler.log"
 
 # Ensure directories exist on iPod
 mkdir -p "$IPOD_MUSIC_DIR" "$IPOD_PLAYLIST_DIR"
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 2. WHICH iPOD IS THIS?  (Aquaria per-user sync plans)
+# ══════════════════════════════════════════════════════════════════════════════
+section "Identifying iPod"
+
+MODE="legacy"
+IPOD_SIG=""
+[[ -f "$AQUARIA_ENV" ]] && source "$AQUARIA_ENV"
+export AQUARIA_URL AQUARIA_HOST_TOKEN
+
+if [[ -n "${AQUARIA_HOST_TOKEN:-}" && -f "$AQUARIA_SYNC" ]]; then
+  IPOD_SIG="$(python3 "$AQUARIA_SYNC" identify --mount "$IPOD_MOUNT" --devname "${IPOD_DEVNAME:-}")"
+  log "iPod signature: $IPOD_SIG"
+  set +e
+  WHO="$(python3 "$AQUARIA_SYNC" seen --mount "$IPOD_MOUNT" --sig "$IPOD_SIG" 2>>"$LOGFILE")"
+  rc=$?
+  set -e
+  case $rc in
+    0)  MODE="aquaria"
+        log "Linked in Aquaria: $WHO — syncing its saved plan." ;;
+    10) log "This iPod isn't linked to an Aquaria account yet."
+        log "Open the web UI → My iPod → \"Link to my account\", then reconnect it."
+        emit_event sync warning "Unlinked iPod connected — link it in Aquaria (My iPod) to sync" "$IPOD_SIG"
+        exit 0 ;;
+    *)  warn "Aquaria unreachable (exit $rc) — falling back to legacy full-library sync." ;;
+  esac
+else
+  log "Aquaria not configured ($AQUARIA_ENV) — legacy full-library sync."
+fi
+
+# Report failures of an Aquaria-mode sync back to the web UI (status + activity feed).
+on_exit() {
+  local rc=$?
+  if [[ $rc -ne 0 && "$MODE" == "aquaria" ]]; then
+    python3 "$AQUARIA_SYNC" report --sig "$IPOD_SIG" --status error \
+      --message "Sync failed (exit $rc) — see $(basename "$LOGFILE") on the server" || true
+  fi
+  [[ -n "${STAGE:-}" ]] && rm -rf "$STAGE"
+}
+trap on_exit EXIT
+
 emit_event sync info "iPod sync started" "$(basename "$LOGFILE")"
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 2. SYNC MUSIC  (server → iPod, server is authoritative)
+# 3. SYNC MUSIC  (server → iPod, server is authoritative)
 # ══════════════════════════════════════════════════════════════════════════════
 section "Syncing music: server → iPod"
+
+# rsync exit codes 23/24 (skipped / vanished files) are non-fatal; 25 = --max-delete hit.
+rsync_soft_fail() {
+  local code=$1
+  if [[ $code -eq 23 || $code -eq 24 ]]; then
+    warn "rsync finished with skipped files (code $code)."
+    warn "Likely cause: folder names with special characters (♯ ∞ trailing spaces) that"
+    warn "vfat cannot store. Run 'beet import -q' on those albums to rename them cleanly."
+  elif [[ $code -eq 25 ]]; then
+    die "rsync stopped: it would delete more than $IPOD_MAX_DELETE files from the iPod. If you just shrank what this iPod syncs, set IPOD_MAX_DELETE higher in config.env for one sync."
+  else
+    die "rsync failed with code $code — aborting."
+  fi
+}
+
+if [[ "$MODE" == "aquaria" ]]; then
+  # 3a. Playlists made on the iPod itself → the owner's account (before the plan is built)
+  python3 "$AQUARIA_SYNC" pull --mount "$IPOD_MOUNT" --sig "$IPOD_SIG" 2>&1 | tee -a "$LOGFILE"
+
+  # 3b. Stage the plan as a symlink tree laid out exactly as the iPod should look
+  STAGE="$(mktemp -d /tmp/ipod-sync-stage.XXXXXX)"
+  python3 "$AQUARIA_SYNC" stage --mount "$IPOD_MOUNT" --sig "$IPOD_SIG" \
+    --music-root "$MUSIC_DIR" --out "$STAGE" 2>&1 | tee -a "$LOGFILE"
+
+  log "Source:      $STAGE/music (-> $MUSIC_DIR)"
+  log "Destination: $IPOD_MUSIC_DIR"
+  # --copy-links: send what the symlinks point at (whole album folders / artwork files)
+  rsync \
+    --recursive \
+    --copy-links \
+    --times \
+    --modify-window=2 \
+    --delete \
+    --max-delete="$IPOD_MAX_DELETE" \
+    --human-readable \
+    --stats \
+    --info=progress2 \
+    --exclude='.DS_Store' \
+    --exclude='._*' \
+    --exclude='.Spotlight-*' \
+    --exclude='.Trashes' \
+    --exclude='*.tmp' \
+    --log-file="$LOGFILE" \
+    --log-file-format='%t [rsync] %o %f (%b bytes)' \
+    "$STAGE/music/" \
+    "$IPOD_MUSIC_DIR/" \
+    || rsync_soft_fail $?
+  log "Music sync complete."
+
+  # 3c. Playlists: exactly the plan's set (iPod-made ones were imported in 3a)
+  section "Syncing playlists"
+  rsync \
+    --recursive \
+    --checksum \
+    --delete \
+    --human-readable \
+    --log-file="$LOGFILE" \
+    --log-file-format='%t [playlists] %o %f' \
+    "$STAGE/playlists/" \
+    "$IPOD_PLAYLIST_DIR/" \
+    | tee -a "$LOGFILE"
+  cp "$STAGE/pushed.json" "$IPOD_MOUNT/.aquaria/pushed.json"
+  log "Playlist sync complete."
+else
+
 
 log "Source:      $MUSIC_DIR"
 log "Destination: $IPOD_MUSIC_DIR"
@@ -116,7 +233,7 @@ rsync \
   --times \
   --modify-window=2 \
   --delete \
-  --max-delete=200 \
+  --max-delete="$IPOD_MAX_DELETE" \
   --human-readable \
   --stats \
   --info=progress2 \
@@ -129,24 +246,12 @@ rsync \
   --log-file-format='%t [rsync] %o %f (%b bytes)' \
   "$MUSIC_DIR/" \
   "$IPOD_MUSIC_DIR/" \
-  || {
-    rsync_code=$?
-    # Exit code 23 = some files skipped (e.g. vfat-incompatible names, permissions)
-    # Exit code 24 = some files vanished mid-transfer (harmless race condition)
-    # Both are non-fatal — log a warning and continue to scrobble/playlist steps.
-    if [[ $rsync_code -eq 23 || $rsync_code -eq 24 ]]; then
-      warn "rsync finished with skipped files (code $rsync_code)."
-      warn "Likely cause: folder names with special characters (♯ ∞ trailing spaces) that"
-      warn "vfat cannot store. Run 'beet import -q' on those albums to rename them cleanly."
-    else
-      die "rsync failed with code $rsync_code — aborting."
-    fi
-  }
+  || rsync_soft_fail $?
 
 log "Music sync complete."
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 3. SYNC PLAYLISTS  (bidirectional — server wins on conflict)
+# 4. SYNC PLAYLISTS  (legacy mode: bidirectional — server wins on conflict)
 # ══════════════════════════════════════════════════════════════════════════════
 section "Syncing playlists"
 
@@ -182,18 +287,37 @@ rsync \
   | tee -a "$LOGFILE"
 
 log "Playlist sync complete."
+fi   # legacy mode
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 4. SCROBBLE
+# 5. SCROBBLE
 # ══════════════════════════════════════════════════════════════════════════════
 section "Scrobbling .scrobbler.log → Last.fm"
 
-if [[ -f "$IPOD_SCROBBLER_LOG" ]]; then
+# Aquaria mode scrobbles to the iPod owner's own Last.fm account (if they connected
+# one and left scrobbling on); legacy mode uses LASTFM_USERNAME from config.env.
+SCROBBLE_ARGS=()
+SKIP_SCROBBLE=0
+if [[ "$MODE" == "aquaria" ]]; then
+  if [[ -f "$STAGE/scrobble.env" ]]; then
+    source "$STAGE/scrobble.env"
+    export LASTFM_SESSION_KEY_OVERRIDE
+    SCROBBLE_ARGS=(--username "$LASTFM_SYNC_USER")
+  else
+    log "Scrobbling is off for this iPod (or its owner hasn't connected Last.fm)."
+    SKIP_SCROBBLE=1
+  fi
+fi
+
+if [[ $SKIP_SCROBBLE -eq 1 ]]; then
+  :
+elif [[ -f "$IPOD_SCROBBLER_LOG" ]]; then
   log "Found scrobbler log: $IPOD_SCROBBLER_LOG"
   if [[ -x "$SCROBBLE_SCRIPT" ]]; then
     python3 "$SCROBBLE_SCRIPT" \
       --log "$IPOD_SCROBBLER_LOG" \
       --config "$CONFIG_FILE" \
+      "${SCROBBLE_ARGS[@]}" \
       2>&1 | tee -a "$LOGFILE"
   else
     warn "scrobble.py not found or not executable at $SCROBBLE_SCRIPT — skipping."
@@ -203,12 +327,16 @@ else
 fi
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 5. SYNC COMPLETE
+# 6. SYNC COMPLETE
 # ══════════════════════════════════════════════════════════════════════════════
 section "Sync complete"
 log "Log saved to: $LOGFILE"
 log "iPod is safe to unplug."
 emit_event sync success "iPod sync complete — safe to unplug" "$(basename "$LOGFILE")"
+if [[ "$MODE" == "aquaria" ]]; then
+  python3 "$AQUARIA_SYNC" report --sig "$IPOD_SIG" --status ok \
+    --message "Synced — safe to unplug" --stats "$(cat "$STAGE/plan.json")" || true
+fi
 
 # Optional: desktop notification if running in a graphical session
 notify-send "iPod Sync" "Sync complete. Safe to unplug." 2>/dev/null || true

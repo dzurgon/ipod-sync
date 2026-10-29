@@ -15,12 +15,14 @@ SYNC_USER="$(sed -n 's/^SYNC_USER=//p' "$CONFIG_FILE" 2>/dev/null | tr -d '\"'\'
 SYNC_USER="${SYNC_USER:-jimin}"
 
 # Run the real sync script as the regular user with a full environment.
+# IPOD_DEVNAME (udev's /dev/sdX) lets the sync identify *which* iPod this is.
 # systemd-run gives it a proper environment, cgroup, and journal logging.
 /usr/bin/systemd-run \
   --unit=ipod-sync \
   --uid="$SYNC_USER" \
   --gid="$SYNC_USER" \
   --setenv=CONFIG_FILE="$CONFIG_FILE" \
+  --setenv=IPOD_DEVNAME="${DEVNAME:-}" \
   --pipe \
   --collect \
   /usr/local/lib/ipod-sync/ipod-sync.sh

@@ -125,11 +125,47 @@ CREATE TABLE IF NOT EXISTS meta (
     key TEXT PRIMARY KEY,
     value TEXT
 );
+
+-- Login sessions: only a SHA-256 of the cookie token is stored.
+CREATE TABLE IF NOT EXISTS sessions (
+    token_hash TEXT PRIMARY KEY,
+    user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at REAL NOT NULL,
+    expires_at REAL NOT NULL
+);
+
+-- iPods the host has seen but nobody has linked yet (signature = USB serial / FS UUID).
+CREATE TABLE IF NOT EXISTS ipod_sightings (
+    signature  TEXT PRIMARY KEY,
+    metadata   TEXT NOT NULL DEFAULT '{}',
+    first_seen REAL NOT NULL,
+    last_seen  REAL NOT NULL
+);
 """
+
+# Columns added after the first release; applied with ALTER TABLE when missing.
+MIGRATIONS = {
+    "users": {
+        "password_hash":  "TEXT",               # scrypt$<salt hex>$<hash hex>; NULL = unclaimed
+        "lastfm_user":    "TEXT",
+        "lastfm_session": "TEXT",
+    },
+    "ipods": {
+        "sync":        "TEXT NOT NULL DEFAULT '{}'",   # JSON sync profile, see ipods.py
+        "last_sync":   "REAL",
+        "last_status": "TEXT",
+    },
+}
 
 
 def connect(db_path: str | Path) -> sqlite3.Connection:
     conn = sqlite3.connect(str(db_path), check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.executescript(SCHEMA)
+    for table, cols in MIGRATIONS.items():
+        have = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+        for col, decl in cols.items():
+            if col not in have:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
+    conn.commit()
     return conn
