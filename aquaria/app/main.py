@@ -396,6 +396,16 @@ def index():
     return (STATIC / "index.html").read_text()
 
 
+# Page URLs (/album/<folder>, /artist/<name>, /library/<path>, /playlist/<id>, …) are
+# routed client-side; the server answers each with the same single-page app.
+PAGES = ("library", "artists", "albums", "artist", "album", "playlists", "playlist",
+         "activity", "ipod")
+for _page in PAGES:
+    app.add_api_route(f"/{_page}", index, response_class=HTMLResponse, include_in_schema=False)
+    app.add_api_route(f"/{_page}/{{rest:path}}", index, response_class=HTMLResponse,
+                      include_in_schema=False)
+
+
 @app.get("/healthz")
 def healthz():
     return {"ok": True, "music_root": str(config.MUSIC_ROOT),

@@ -197,3 +197,12 @@ def test_album_cover_upload_becomes_baseline_jpeg(client):
     assert client.post("/api/folder-art/fetch", json={"rel_dir": album}).status_code == 400
     assert client.post("/api/folder-art/upload", data={"rel_dir": "0_POP/Charli"},
                        files={"file": ("x.png", PNG, "image/png")}).status_code == 404
+
+
+def test_page_urls_serve_the_app(client):
+    for url in ("/library/0_FOLK/Pete Seeger", "/album/0_POP/Charli XCX/BRAT (2025)",
+                "/artist/Charli XCX", "/playlists", "/playlist/1", "/albums"):
+        r = client.get(url)
+        assert r.status_code == 200 and "<title>Aquaria" in r.text, url
+    assert client.get("/api/stats").headers["content-type"].startswith("application/json")
+    assert client.get("/nope").status_code == 404

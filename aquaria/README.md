@@ -14,6 +14,9 @@ for the full design; this is the quick start.
 - `app/main.py` — FastAPI API + single-file aquamarine UI.
 - Browse: **Folders** view mirrors `FLAC/` on disk (`0_GENRE` → artist → album),
   plus Artist and All Albums views; album pages with in-browser playback.
+- Every page has its own URL (back/forward, bookmarks, new tabs work):
+  `/library/0_FOLK/Big Thief`, `/album/0_FOLK/Big Thief/Masterpiece (2016)`,
+  `/artist/Big Thief`, `/artists`, `/albums`, `/playlists`, `/playlist/<id>`.
 - Download: single tracks, whole albums or playlists as streamed `.zip` files.
 - Playlists: create / add (from album pages or the search bubble) / reorder /
   remove / delete. Mirrored to `Playlists/*.m3u` so `ipod-sync.sh` still pushes
@@ -26,7 +29,7 @@ for the full design; this is the quick start.
   logo). Fetch one, fetch all missing, or upload by hand from the folder's page.
 - Album covers: "Upload cover" on any album page writes `cover.jpg` into the album
   folder (converted to a baseline JPEG ≤1000px so Rockbox can show it).
-- `tests/` — 30 tests (parser edge cases, engine, playlist + download API).
+- `tests/` — 31 tests (parser edge cases, engine, playlist + download API).
 
 ## Run locally (dev)
 

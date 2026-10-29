@@ -100,9 +100,12 @@
   .head .bar{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
   .crumb{font-size:13px;color:var(--ink-dim);margin-bottom:14px;cursor:pointer}
   .crumb:hover{color:var(--ink)}
-  .crumb.path{cursor:default}
-  .crumb.path span{cursor:pointer}
-  .crumb.path span:hover{color:var(--aqua);text-decoration:underline}
+  .crumb a{color:inherit;text-decoration:none}
+  .crumb a:hover{color:var(--aqua);text-decoration:underline}
+  a.tab,a.tile,a.row,a.main,.seg a{color:inherit;text-decoration:none}
+  .seg a{display:inline-block;color:var(--ink-dim);padding:7px 14px;border-radius:11px;font-size:13px;transition:.15s}
+  .seg a.on{background:var(--aqua);color:#012129;font-weight:600}
+  .tile{display:block}
 
   input.text{background:rgba(0,0,0,.3);border:1px solid var(--line);border-radius:10px;
              color:var(--ink);padding:8px 11px;font-size:14px;outline:none}
@@ -163,10 +166,10 @@
   <div class="users" id="users"></div>
 
   <div class="tabs">
-    <div class="tab" data-tab="activity">Activity</div>
-    <div class="tab" data-tab="ipod">My iPod</div>
-    <div class="tab" data-tab="playlists">Playlists</div>
-    <div class="tab active" data-tab="library">Library</div>
+    <a class="tab" data-link data-tab="activity" href="/activity">Activity</a>
+    <a class="tab" data-link data-tab="ipod" href="/ipod">My iPod</a>
+    <a class="tab" data-link data-tab="playlists" href="/playlists">Playlists</a>
+    <a class="tab" data-link data-tab="library" href="/library">Library</a>
   </div>
 
   <div class="panel" id="panel"></div>
@@ -195,7 +198,7 @@ const enc = p => p.split("/").map(encodeURIComponent).join("/");
 
 let VIEW = "genre";
 let PATH = [];               // folder-browse position, e.g. ["0_FOLK","Pete Seeger"]
-let BACK = null;             // where an album page's "←" returns to
+let NAV = 0;                 // bumped per navigation; stale async renders bail out
 let EDITING = null;          // playlist id that search results add to
 let PLAYLISTS = [];
 let QUEUE = [], QI = -1;     // play queue of {rel_path,title,artist}
@@ -293,24 +296,20 @@ function showAddPop(btn, payload){
 const icon = t => ({head:'👤', genre:'🗂️'})[t] || '💿';
 const yr = y => y ? ` (${y})` : "";
 
-function tile(a, attrs){
+function tile(a, href){
   const round = a.icon==='head' ? 'round':'';
   const img = a.image ? `<img loading="lazy" src="${esc(a.image)}" onerror="this.replaceWith('${icon(a.icon)}')">` : icon(a.icon||'album');
   const meta = a.icon==='head'
      ? `${a.n_albums} album${a.n_albums===1?'':'s'}`
      : `${a.n_tracks} tracks${a.year? ' · '+a.year:''}`;
-  return `<div class="tile" ${attrs}>
+  return `<a class="tile" data-link href="${esc(href)}">
       <div class="thumb ${round}">${img}</div>
       <div class="t-name" title="${esc(a.name)}">${esc(a.name)}</div>
       <div class="t-meta">${esc(a.sub||meta)}</div>
-    </div>`;
+    </a>`;
 }
 const albumTile = (a, sub) => tile({name:a.album, sub, n_tracks:a.n_tracks, year:a.year,
-  icon:'album', image:"/art/"+enc(a.folder)+"?v="+IMGV}, `data-folder="${esc(a.folder)}"`);
-
-function wireFolders(root, back){
-  root.querySelectorAll("[data-folder]").forEach(el=>el.onclick=()=>{ BACK = back; renderAlbum(el.dataset.folder); });
-}
+  icon:'album', image:"/art/"+enc(a.folder)+"?v="+IMGV}, "/album/"+enc(a.folder));
 
 // ── Folder browse: mirrors FLAC/ on disk (0_GENRE/Artist/Album, or 0_GENRE/Artist - Album) ──
 let TREE = null;
@@ -380,8 +379,8 @@ function renderFolder(body){
   let node = TREE;
   for(const p of PATH) node = node?.kids[p];
   if(!node){ PATH = []; node = TREE; }
-  const crumbs = [`<span data-depth="0">FLAC</span>`].concat(PATH.map((p,i)=>
-    `<span data-depth="${i+1}">${esc(i===0?genreLabel(p):p)}</span>`)).join(" / ");
+  const crumbs = [`<a data-link href="/library">FLAC</a>`].concat(PATH.map((p,i)=>
+    `<a data-link href="/library/${enc(PATH.slice(0,i+1).join("/"))}">${esc(i===0?genreLabel(p):p)}</a>`)).join(" / ");
   const depth = PATH.length;
   const folders = Object.keys(node.kids).sort((a,b)=>a.localeCompare(b,undefined,{sensitivity:"base"}));
   const albums = [...node.albums].sort((a,b)=>(a.artist_key+a.year).localeCompare(b.artist_key+b.year));
@@ -391,7 +390,7 @@ function renderFolder(body){
     return tile({name: depth===0 ? genreLabel(name) : name,
       sub: depth===0 ? `${sub} folders · ${n} albums` : `${n} album${n===1?'':'s'}`,
       icon: depth===0 ? 'genre' : 'head', image: ad?.image ? imgUrl(ad.image) : null},
-      `data-sub="${esc(name)}"`);
+      "/library/"+enc([...PATH, name].join("/")));
   };
   const here = ARTDIRS[PATH.join("/")], gHere = depth===1 && GENREDIRS[PATH[0]];
   const nMissing = Object.values(GENREDIRS).concat(Object.values(ARTDIRS)).filter(d=>!d.image).length;
@@ -401,29 +400,27 @@ function renderFolder(body){
     ${gHere ? artistHeader([gHere], gHere.genre, `${folders.length} folders · ${countAlbums(node)} albums`, true) : ""}
     <div class="grid">${folders.map(folderTile).join("")}${albums.map(a=>albumTile(a,
       depth>=2 ? (a.year||"") : `${a.artist}${a.year?' · '+a.year:''}`)).join("")}</div>`;
-  body.querySelectorAll("[data-depth]").forEach(c=>c.onclick=()=>{ PATH = PATH.slice(0,+c.dataset.depth); renderFolder(body); });
-  body.querySelectorAll("[data-sub]").forEach(el=>el.onclick=()=>{ PATH = [...PATH, el.dataset.sub]; renderFolder(body); });
   if(here || gHere) wireArtistHeader([here || gHere], ()=>renderFolder(body));
   if(depth===0) wireFetchBar();
-  wireFolders(body, renderLibrary);
+  setTitle(PATH.length ? (depth===1 ? genreLabel(PATH[0]) : PATH[depth-1]) : "Library");
 }
 
 let ARTISTS = null;
 
+const VIEW_URL = {genre:"/library", artist:"/artists", all_albums:"/albums"};
+
 async function renderLibrary(){
-  const panel = $("#panel");
+  const nav = NAV, panel = $("#panel");
   panel.innerHTML = `<div class="seg">
-      <button data-v="genre">Folders</button>
-      <button data-v="artist">Artist &amp;/or Album</button>
-      <button data-v="all_albums">All Albums</button>
+      <a data-link data-v="genre" href="/library">Folders</a>
+      <a data-link data-v="artist" href="/artists">Artist &amp;/or Album</a>
+      <a data-link data-v="all_albums" href="/albums">All Albums</a>
     </div><div id="libbody"><div class="empty">loading…</div></div>`;
-  panel.querySelectorAll(".seg button").forEach(b=>{
-    if(b.dataset.v===VIEW) b.classList.add("on");
-    b.onclick=()=>{ VIEW=b.dataset.v; PATH=[]; renderLibrary(); };
-  });
+  panel.querySelectorAll(".seg a").forEach(b=>b.classList.toggle("on", b.dataset.v===VIEW));
   const body = $("#libbody");
   const [{items}] = await Promise.all([
     api("/api/library?view="+(VIEW==="genre" ? "all_albums" : VIEW)), loadArtDirs()]);
+  if(nav !== NAV) return;
   if(!items.length){ body.innerHTML=`<div class="empty">Library is empty or still indexing — refresh in a moment.</div>`; return; }
 
   if(VIEW==="genre"){
@@ -434,19 +431,19 @@ async function renderLibrary(){
     ARTISTS = items;
     const nMissing = Object.values(GENREDIRS).concat(Object.values(ARTDIRS)).filter(d=>!d.image).length;
     body.innerHTML = `${fetchBar(nMissing, "artwork")}
-      <div class="grid">${items.map((a,i)=>tile({
+      <div class="grid">${items.map(a=>tile({
         name:a.artist, icon:'head', image:a.image ? imgUrl(a.image) : null,
-        n_albums:a.n_albums}, `data-ai="${i}"`)).join("")}</div>`;
-    body.querySelectorAll("[data-ai]").forEach(el=>el.onclick=()=>renderArtist(ARTISTS[+el.dataset.ai]));
+        n_albums:a.n_albums}, "/artist/"+encodeURIComponent(a.artist))).join("")}</div>`;
     wireFetchBar();
+    setTitle("Artists");
   } else {
     body.innerHTML = `<div class="list">${items.map(a=>`
-      <div class="row click" data-folder="${esc(a.folder)}">
+      <a class="row click" data-link href="/album/${enc(a.folder)}">
         <div class="main">${esc(a.display_all_albums)}</div>
         <div class="r-genre">${esc(a.genre||'')} · ${a.n_tracks} trk</div>
-      </div>`).join("")}</div>`;
+      </a>`).join("")}</div>`;
+    setTitle("Albums");
   }
-  wireFolders(body, renderLibrary);
 }
 
 const fetchBar = (n) => `<div class="bar" style="display:flex;gap:10px;align-items:center;margin-bottom:16px;flex-wrap:wrap">
@@ -473,21 +470,35 @@ async function pollFetch(){
   }
 }
 
+async function renderArtistByName(name){
+  const nav = NAV;
+  const [{items}] = await Promise.all([api("/api/library?view=artist"), loadArtDirs()]);
+  if(nav !== NAV) return;
+  const a = items.find(x=>x.artist===name) || items.find(x=>x.artist.toLowerCase()===name.toLowerCase());
+  if(!a) return notFound(`No artist named “${name}”`, "/artists", "Artists");
+  renderArtist(a);
+}
+
 function renderArtist(a){
   const dirs = Object.values(ARTDIRS).filter(d=>d.artist_key===a.artist_key);
-  $("#panel").innerHTML = `<div class="crumb" id="back">← Library</div>
+  $("#panel").innerHTML = `${backLink("/artists", "Artists")}
     ${dirs.length ? artistHeader(dirs, a.artist, `${a.n_albums} albums · ${a.n_tracks} tracks`)
       : `<h2>${esc(a.artist)}</h2><div class="sub">${a.n_albums} albums · ${a.n_tracks} tracks · no artist folder (name parsed from album folders), so no photo</div>`}
     <div class="grid">${a.albums.map(al=>albumTile(al, al.year||"")).join("")}</div>`;
-  if(dirs.length) wireArtistHeader(dirs, ()=>renderArtist(a));
-  $("#back").onclick = renderLibrary;
-  wireFolders($("#panel"), ()=>renderArtist(a));
+  if(dirs.length) wireArtistHeader(dirs, ()=>renderArtistByName(a.artist));
+  setTitle(a.artist);
 }
 
 async function renderAlbum(folder){
-  const al = await api("/api/album?folder="+encodeURIComponent(folder));
+  const nav = NAV;
+  let al;
+  try { al = await api("/api/album?folder="+encodeURIComponent(folder)); }
+  catch(e){ if(nav === NAV) notFound(`No album at “${folder}”`, "/library", "Library"); return; }
+  if(nav !== NAV) return;
   const tracks = al.tracks;
-  $("#panel").innerHTML = `<div class="crumb" id="back">← Library</div>
+  const parent = folder.split("/").slice(0,-1);
+  const parentLabel = parent.length ? (parent.length===1 ? genreLabel(parent[0]) : parent[parent.length-1]) : "Library";
+  $("#panel").innerHTML = `${backLink("/library/"+enc(parent.join("/")), parentLabel)}
     <div class="head">
       <div class="thumb"><img src="/art/${enc(folder)}?v=${IMGV}" onerror="this.replaceWith('💿')"></div>
       <div class="info">
@@ -511,7 +522,7 @@ async function renderAlbum(folder){
           <button class="btn icon" data-add="${i}" title="Add to playlist">＋</button>
         </div>
       </div>`).join("")}</div>`;
-  $("#back").onclick = BACK || renderLibrary;
+  setTitle(`${al.album} — ${al.artist}`);
   $("#playAll").onclick = ()=>play(tracks, 0);
   $("#addAll").onclick = e=>{ e.stopPropagation(); showAddPop(e.currentTarget, {folder}); };
   $("#coverUpload").onchange = async e=>{
@@ -529,34 +540,40 @@ async function renderAlbum(folder){
 
 // ── Playlists ───────────────────────────────────────────────────────────────
 async function renderPlaylists(){
+  const nav = NAV;
   await loadPlaylists();
+  if(nav !== NAV) return;
+  setTitle("Playlists");
   $("#panel").innerHTML = `
     <form class="head" id="newForm" style="align-items:center">
       <input class="text" id="newName" placeholder="New playlist name" style="flex:1;min-width:180px">
       <button class="btn primary">＋ Create</button>
     </form>
     ${PLAYLISTS.length ? `<div class="list">${PLAYLISTS.map(p=>`
-      <div class="row click" data-pid="${p.id}">
-        <div class="main">🎶 ${esc(p.name)} <small>· ${p.n_tracks} tracks${p.n_missing?` · ${p.n_missing} unmatched`:''}</small></div>
+      <div class="row">
+        <a class="main" data-link href="/playlist/${p.id}">🎶 ${esc(p.name)} <small>· ${p.n_tracks} tracks${p.n_missing?` · ${p.n_missing} unmatched`:''}</small></a>
         <div class="acts"><a class="btn icon" href="/download/playlist/${p.id}" title="Download (.zip)">⬇</a></div>
       </div>`).join("")}</div>`
     : `<div class="empty">No playlists yet.</div>`}`;
   $("#newForm").onsubmit = async e=>{
     e.preventDefault();
     const name = $("#newName").value.trim(); if(!name) return;
-    try { const p = await post("/api/playlists", {name}); EDITING = p.id; renderPlaylist(p.id); }
+    try { const p = await post("/api/playlists", {name}); EDITING = p.id; go("/playlist/"+p.id); }
     catch(err){ toast(err.message); }
   };
-  document.querySelectorAll("[data-pid]").forEach(r=>r.onclick=e=>{
-    if(e.target.closest("a")) return; renderPlaylist(+r.dataset.pid); });
 }
 
 async function renderPlaylist(pid){
+  const nav = NAV;
   await loadPlaylists();
-  const pl = await api(`/api/playlists/${pid}`);
+  let pl;
+  try { pl = await api(`/api/playlists/${pid}`); }
+  catch(e){ if(nav === NAV) notFound("No such playlist", "/playlists", "Playlists"); return; }
+  if(nav !== NAV) return;
+  setTitle(pl.name);
   const playable = pl.items.filter(i=>i.rel_path);
   const editing = EDITING===pid;
-  $("#panel").innerHTML = `<div class="crumb" id="back">← Playlists</div>
+  $("#panel").innerHTML = `${backLink("/playlists", "Playlists")}
     <div class="head" style="align-items:center">
       <div class="info">
         <h2>🎶 ${esc(pl.name)}</h2>
@@ -584,14 +601,13 @@ async function renderPlaylist(pid){
         </div>
       </div>`).join("")}</div>`
     : `<div class="empty">Empty — click “Add songs via search”, or use ＋ on any album.</div>`}`;
-  $("#back").onclick = renderPlaylists;
   $("#playAll").onclick = ()=>play(playable, 0);
   $("#edit").onclick = ()=>{ EDITING = editing ? null : pid; loadPlaylists();
     if(!editing){ $("#fab").classList.add("open"); $("#q").focus(); } renderPlaylist(pid); };
   $("#del").onclick = async ()=>{
     if(!confirm(`Delete playlist “${pl.name}”? (The .m3u is kept as .m3u.deleted)`)) return;
     await post(`/api/playlists/${pid}`, null, "DELETE"); if(EDITING===pid) EDITING=null;
-    toast("Playlist deleted"); renderPlaylists(); };
+    toast("Playlist deleted"); go("/playlists", true); };
   document.querySelectorAll("[data-play]").forEach(b=>b.onclick=()=>
     play(playable, playable.findIndex(t=>t.rel_path===b.dataset.play)));
   document.querySelectorAll("[data-rm]").forEach(b=>b.onclick=async()=>{
@@ -604,16 +620,64 @@ async function renderPlaylist(pid){
 function renderStub(name){
   $("#panel").innerHTML = `<div class="empty">“${esc(name)}” module — scaffolded in the backend,
     UI arrives in a later iteration.</div>`;
+  setTitle(name);
 }
 
-document.querySelectorAll(".tab").forEach(t=>t.onclick=()=>{
-  document.querySelectorAll(".tab").forEach(x=>x.classList.remove("active"));
-  t.classList.add("active");
-  const k=t.dataset.tab;
-  if(k==="library") renderLibrary();
-  else if(k==="playlists") renderPlaylists();
-  else renderStub(t.textContent);
+// ── Router: real URLs, Spotify-style prefixes ───────────────────────────────
+//   /library[/<folder path>]   /artists  /artist/<name>   /albums  /album/<folder path>
+//   /playlists  /playlist/<id>   /activity  /ipod
+function setTitle(t){ document.title = t ? `${t} · Aquaria` : "Aquaria Music Manager"; }
+
+// "← Parent": step back through history when we got here in-app, else open the parent URL.
+function backLink(href, label){
+  return `<a class="crumb" data-link data-back href="${esc(href)}">← ${esc(label)}</a>`;
+}
+
+function notFound(msg, href, label){
+  $("#panel").innerHTML = `${backLink(href, label)}<div class="empty">${esc(msg)}</div>`;
+  setTitle("Not found");
+}
+
+function go(url, replace=false){
+  if(url === location.pathname) return route();
+  history[replace ? "replaceState" : "pushState"]({inapp:true}, "", url);
+  window.scrollTo(0, 0);
+  route();
+}
+
+document.addEventListener("click", e=>{
+  const a = e.target.closest("a[data-link]");
+  if(!a || e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+  e.preventDefault();
+  if(a.hasAttribute("data-back") && history.state?.inapp) history.back();
+  else go(a.getAttribute("href"));
 });
+window.addEventListener("popstate", route);
+
+const TAB_OF = {library:"library", artists:"library", albums:"library", artist:"library",
+                album:"library", playlists:"playlists", playlist:"playlists",
+                activity:"activity", ipod:"ipod"};
+
+function route(){
+  NAV++;
+  const [head, ...rest] = location.pathname.split("/").filter(Boolean).map(decodeURIComponent);
+  if(!head) return go("/library", true);
+  const tab = TAB_OF[head];
+  document.querySelectorAll(".tab").forEach(t=>t.classList.toggle("active", t.dataset.tab===tab));
+  closePop();
+  switch(head){
+    case "library":   VIEW = "genre"; PATH = rest; return renderLibrary();
+    case "artists":   VIEW = "artist"; return renderLibrary();
+    case "albums":    VIEW = "all_albums"; return renderLibrary();
+    case "artist":    return renderArtistByName(rest.join("/"));
+    case "album":     return renderAlbum(rest.join("/"));
+    case "playlists": return renderPlaylists();
+    case "playlist":  return renderPlaylist(+rest[0]);
+    case "activity":  return renderStub("Activity");
+    case "ipod":      return renderStub("My iPod");
+    default:          return notFound("Page not found", "/library", "Library");
+  }
+}
 
 // ── currently-adding search ─────────────────────────────────────────────────
 $("#fabBtn").onclick=()=>{ $("#fab").classList.toggle("open"); if($("#fab").classList.contains("open")) $("#q").focus(); };
@@ -637,23 +701,23 @@ $("#res").onclick = e=>{
   const it = e.target.closest(".item"); if(!it || !RES) return;
   if(it.dataset.sa!==undefined){
     const a = RES.albums[+it.dataset.sa];
-    if(EDITING) addTo(EDITING, {folder:a.folder}); else { BACK = null; renderAlbum(a.folder); }
+    if(EDITING) addTo(EDITING, {folder:a.folder}); else go("/album/"+enc(a.folder));
   } else if(it.dataset.st!==undefined){
     const t = RES.tracks[+it.dataset.st];
     EDITING ? addTo(EDITING, {rel_paths:[t.rel_path]}) : play([t], 0);
   }
-  if(EDITING && document.querySelector("#panel h2")?.textContent.startsWith("🎶"))
+  if(EDITING && location.pathname === "/playlist/"+EDITING)
     setTimeout(()=>renderPlaylist(EDITING), 150);
 };
 
 (async ()=>{
   loadUsers(); loadPlaylists();
   const s = await loadStats();
-  renderLibrary();
+  route();
   // First boot: the server indexes in the background — poll until tracks appear.
   if(!s.tracks){
     const iv = setInterval(async()=>{ const s2 = await loadStats();
-      if(s2.tracks){ clearInterval(iv); loadUsers(); loadPlaylists(); renderLibrary(); } }, 3000);
+      if(s2.tracks){ clearInterval(iv); loadUsers(); loadPlaylists(); route(); } }, 3000);
   }
 })();
 </script>
