@@ -89,6 +89,23 @@ def test_pull_playlist_from_ipod_and_report(client):
     assert kinds == ["sync", "playlist", "link"]     # sighting before linking logs nothing for the owner
 
 
+def test_sync_in_progress_then_result(client):
+    seen(client); link(client)
+    client.post(f"/api/host/ipods/{SIG}/report", headers=H, json={"status": "syncing"})
+    mine = client.get("/api/ipods").json()["ipods"][0]
+    assert mine["host"]["state"] == "syncing" and mine["host"]["sync_started"]
+    assert mine["last_sync"] is None and mine["last_status"] is None   # not a result yet
+
+    client.post(f"/api/host/ipods/{SIG}/report", headers=H, json={"status": "ok", "message": "Synced"})
+    mine = client.get("/api/ipods").json()["ipods"][0]
+    assert mine["host"]["state"] == "ok" and mine["host"]["sync_started"] is None
+    assert mine["last_status"] == "ok: Synced"
+    msgs = [a["message"] for a in client.get("/api/activity").json()["activity"]]
+    assert msgs[0] == "Synced" and msgs[1].startswith("Sync of ") and msgs[1].endswith(" started")
+    assert client.post(f"/api/host/ipods/{SIG}/report", headers=H,
+                       json={"status": "bogus"}).status_code == 422
+
+
 def test_unlink(client):
     seen(client); ip = link(client)
     client.delete(f"/api/ipods/{ip['id']}")

@@ -116,7 +116,8 @@ if [[ -n "${AQUARIA_HOST_TOKEN:-}" && -f "$AQUARIA_SYNC" ]]; then
   set -e
   case $rc in
     0)  MODE="aquaria"
-        log "Linked in Aquaria: $WHO — syncing its saved plan." ;;
+        log "Linked in Aquaria: $WHO — syncing its saved plan."
+        python3 "$AQUARIA_SYNC" report --sig "$IPOD_SIG" --status syncing || true ;;
     10) log "This iPod isn't linked to an Aquaria account yet."
         log "Open the web UI → My iPod → \"Link to my account\", then reconnect it."
         emit_event sync warning "Unlinked iPod connected — link it in Aquaria (My iPod) to sync" "$IPOD_SIG"

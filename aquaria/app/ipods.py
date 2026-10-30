@@ -28,6 +28,8 @@ import hmac
 import json
 import time
 
+from typing import Literal
+
 from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel
 
@@ -301,8 +303,8 @@ class PulledPlaylist(BaseModel):
 
 
 class Report(BaseModel):
-    status: str                        # ok | warning | error
-    message: str
+    status: Literal["syncing", "ok", "warning", "error"]   # syncing = a sync just started
+    message: str = ""
     stats: dict = {}
 
 
@@ -370,9 +372,12 @@ def host_report(sig: str, body: Report):
         s = state.conn.execute("SELECT metadata FROM ipod_sightings WHERE signature=?", (sig,)).fetchone()
         if s:
             meta = json.loads(s["metadata"]) | {"state": body.status}
+            meta["sync_started"] = now if body.status == "syncing" else None
             state.conn.execute("UPDATE ipod_sightings SET metadata=?, last_seen=? WHERE signature=?",
                                (json.dumps(meta), now, sig))
-        if ip:
+        if ip and body.status == "syncing":
+            _activity(ip["user_id"], ip["id"], "sync", f"Sync of {ip['name']} started")
+        elif ip:
             state.conn.execute("UPDATE ipods SET last_sync=?, last_status=? WHERE id=?",
                                (now, f"{body.status}: {body.message}"[:300], ip["id"]))
             _activity(ip["user_id"], ip["id"], "sync", body.message, body.stats | {"status": body.status})

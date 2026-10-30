@@ -44,6 +44,8 @@
   .pill{display:inline-block;font-size:11px;padding:1px 8px;border-radius:10px;border:1px solid var(--line);color:var(--ink-dim)}
   .pill.ok{border-color:var(--aqua);color:var(--aqua)}
   .pill.err{border-color:#ff8a8a;color:#ffb3b3}
+  .pill.sync{border-color:#ffd27a;color:#ffe2a8;animation:pulse 1.6s ease-in-out infinite}
+  @keyframes pulse{50%{opacity:.55}}
   .avatar{width:96px;height:96px;border-radius:50%;background:linear-gradient(145deg,#0b5b63,#0a3b45);
           border:1px solid var(--line);display:flex;align-items:center;justify-content:center;font-size:40px;font-weight:700;flex-shrink:0}
   .settings{display:grid;gap:14px;margin-top:12px}
@@ -809,6 +811,35 @@ function loginPrompt(what){
     to ${what}.</div>`;
 }
 
+// Top-right corner of an iPod card: live state (syncing / connected) + last sync result.
+function ipodStatus(ip){
+  const st = ip.host?.state, now = Date.now()/1000;
+  // A sync can outlast the 15-min "connected" window; 12 h covers a full first copy.
+  const syncing = st === "syncing" && now - (ip.host.sync_started||0) < 43200;
+  const live = syncing ? `<span class="pill sync">⟳ Sync in progress · started ${ago(ip.host.sync_started)}</span><br>`
+    : st && now - (ip.last_seen||0) < 900
+    ? `<span class="pill ok">● connected${{ok:" · synced", warning:" · synced with warnings", error:" · sync failed"}[st]||""}</span><br>`
+    : "";
+  return `${live}<span class="sub" style="margin:0;font-size:12px">Last sync ${ago(ip.last_sync)}</span> ${statusPill(ip.last_status)}`;
+}
+
+// While the My iPod page is open, refresh just the status corners (forms stay untouched).
+let IPOD_POLL = 0;             // newest poll loop's token; older loops stop themselves
+function pollIpodStatus(nav, me = ++IPOD_POLL){
+  setTimeout(async ()=>{
+    if(nav !== NAV || me !== IPOD_POLL) return;
+    try {
+      const data = await api("/api/ipods");
+      if(nav !== NAV) return;
+      for(const ip of data.ipods){
+        const el = document.querySelector(`[data-ipod="${ip.id}"] [data-status]`);
+        if(el) el.innerHTML = ipodStatus(ip);
+      }
+    } catch(e){}
+    pollIpodStatus(nav, me);
+  }, 10000);
+}
+
 async function renderIpods(){
   setTitle("My iPod");
   if(!ME) return loginPrompt("link your iPod and choose what syncs to it");
@@ -827,16 +858,14 @@ async function renderIpods(){
     </div>`).join("");
   const others = PLAYLISTS.filter(p=>!p.is_mine);
   const card = ip => {
-    const s = ip.sync, sum = ip.summary, st = ip.host?.state;
-    const live = st && Date.now()/1000 - (ip.last_seen||0) < 900;
+    const s = ip.sync, sum = ip.summary;
     const pick = (list, own) => list.map(p=>`<label><input type="checkbox" name="pl" value="${p.id}" ${s.playlists.includes(p.id)?'checked':''} ${own && s.own_playlists ? 'disabled checked' : ''}>
         ${esc(p.name)}${p.is_mine ? lock(p) : ` <small class="sub">by ${esc(p.owner)}</small>`}</label>`).join("");
     return `<div class="card" data-ipod="${ip.id}">
       <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap">
         <div><h3>📟 ${esc(ip.name)}</h3>
           <div class="sub" style="margin:0">${meta(ip.metadata) || "Unknown model"}</div></div>
-        <div style="text-align:right">${live ? `<span class="pill ok">● connected · ${esc(st)}</span><br>` : ""}
-          <span class="sub" style="margin:0;font-size:12px">Last sync ${ago(ip.last_sync)}</span> ${statusPill(ip.last_status)}</div>
+        <div style="text-align:right" data-status>${ipodStatus(ip)}</div>
       </div>
       <div class="sub" style="margin:10px 0 0" data-sum>Will receive <b>${sum.albums}</b> albums · ${sum.tracks} tracks · ${gb(sum.bytes)} · ${sum.playlists} playlists</div>
       <form class="settings">
@@ -896,6 +925,7 @@ async function renderIpods(){
       if(!confirm("Unlink this iPod? It stops syncing until someone links it again.")) return;
       await post(`/api/ipods/${id}`, null, "DELETE"); loadUsers(); renderIpods(); };
   });
+  pollIpodStatus(nav);
 }
 
 // ── Activity: the logged-in user's iPod + playlist history ──────────────────

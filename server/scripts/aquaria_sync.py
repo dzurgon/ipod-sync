@@ -19,7 +19,8 @@ environment (ipod-sync.sh sources /etc/ipod-sync/aquaria.env). Subcommands:
                    DIR/playlists  the .m3u files this iPod should hold
                    DIR/pushed.json  names we pushed (copied to the iPod after a good push)
                    DIR/scrobble.env  Last.fm user + session for the owner (mode 600), if on
-  report    --sig S --status ok|warning|error --message TEXT [--stats JSON]
+  report    --sig S --status syncing|ok|warning|error [--message TEXT] [--stats JSON]
+                                      (syncing = shown as "sync in progress" until the result)
 """
 
 from __future__ import annotations
@@ -242,8 +243,8 @@ def main() -> int:
     p = sub.add_parser("stage"); p.add_argument("--mount", required=True); p.add_argument("--sig", required=True)
     p.add_argument("--music-root", required=True); p.add_argument("--out", required=True)
     p = sub.add_parser("report"); p.add_argument("--sig", required=True)
-    p.add_argument("--status", required=True, choices=["ok", "warning", "error"])
-    p.add_argument("--message", required=True); p.add_argument("--stats", default="")
+    p.add_argument("--status", required=True, choices=["syncing", "ok", "warning", "error"])
+    p.add_argument("--message", default=""); p.add_argument("--stats", default="")
     a = ap.parse_args()
     try:
         return {"identify": cmd_identify, "seen": cmd_seen, "pull": cmd_pull,
