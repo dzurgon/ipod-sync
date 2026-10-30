@@ -18,7 +18,7 @@ SYNC_USER="${SYNC_USER:-${SUDO_USER:-jimin}}"
 AQUARIA_DIR="${AQUARIA_DIR:-$(getent passwd "$SYNC_USER" | cut -d: -f6)/docker/aquaria}"
 
 install -d -m 755 "$LIB" "$LIB/lib"
-install -m 755 "$REPO"/server/scripts/{ipod-sync.sh,udev-trigger.sh,ipod-event.sh,scrobble.py,aquaria_sync.py} "$LIB/"
+install -m 755 "$REPO"/server/scripts/{ipod-sync.sh,ipod-attach.sh,udev-trigger.sh,ipod-event.sh,scrobble.py,aquaria_sync.py} "$LIB/"
 install -m 755 "$REPO/server/scripts/lib/common.sh" "$LIB/lib/"
 install -m 644 "$REPO/server/udev/99-ipod-rockbox.rules" /etc/udev/rules.d/99-ipod-rockbox.rules
 echo "Installed scripts → $LIB, udev rule → /etc/udev/rules.d/99-ipod-rockbox.rules"

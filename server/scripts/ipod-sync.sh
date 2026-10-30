@@ -331,11 +331,17 @@ fi
 # ══════════════════════════════════════════════════════════════════════════════
 section "Sync complete"
 log "Log saved to: $LOGFILE"
-log "iPod is safe to unplug."
-emit_event sync success "iPod sync complete — safe to unplug" "$(basename "$LOGFILE")"
+# Under ipod-attach.sh the mount is unmounted right after this — it announces "safe".
+if [[ "${IPOD_MANAGED_MOUNT:-}" == 1 ]]; then
+  log "Unmounting next — wait for \"safe to unplug\"."
+  emit_event sync success "iPod sync complete — unmounting" "$(basename "$LOGFILE")"
+else
+  log "iPod is safe to unplug."
+  emit_event sync success "iPod sync complete — safe to unplug" "$(basename "$LOGFILE")"
+fi
 if [[ "$MODE" == "aquaria" ]]; then
   python3 "$AQUARIA_SYNC" report --sig "$IPOD_SIG" --status ok \
-    --message "Synced — safe to unplug" --stats "$(cat "$STAGE/plan.json")" || true
+    --message "Synced" --stats "$(cat "$STAGE/plan.json")" || true
 fi
 
 # Optional: desktop notification if running in a graphical session

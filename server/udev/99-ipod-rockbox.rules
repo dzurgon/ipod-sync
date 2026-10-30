@@ -1,38 +1,38 @@
-# udev rule: trigger iPod sync + log connect/disconnect for a Rockbox iPod Classic
+# udev rule: mount + sync a Rockbox iPod when it's plugged into the server
 #
-# Deploy to: /etc/udev/rules.d/99-ipod-rockbox.rules
+# Deploy to: /etc/udev/rules.d/99-ipod-rockbox.rules   (server/scripts/install-host.sh does this)
 #
 # After deploying:
 #   sudo udevadm control --reload-rules
-#   sudo udevadm trigger
 #
-# To find your iPod's idVendor/idProduct:
-#   lsusb  →  look for "Apple, Inc. iPod"
-#   udevadm info --name=/dev/sdX --attribute-walk | grep -E 'idVendor|idProduct'
-#
-# Apple iPod Classic: idVendor=05ac. idProduct varies by generation/mode — a
-# Rockbox iPod in disk mode commonly enumerates as 1209 (used below). If yours
-# differs (e.g. 1261 on some 5th-gen units), update ID_MODEL_ID in all rules.
+# Apple iPods in disk mode enumerate as idVendor=05ac, idProduct=12xx (e.g. 1209 for the
+# iPod Video, 1261 for some Classics) — matched with "12??" so any iPod works.
 # Confirm with `lsusb | grep -i apple` after connecting.
+#
+# Only the iPod's FAT partition (where Rockbox and the music live) triggers anything, so
+# one plug-in starts exactly one sync. ipod-attach.sh (via udev-trigger.sh) owns the
+# mount: it clears stale mounts, mounts the partition, syncs, and unmounts when done.
 
-# ── Rule 1: Tag the block device when iPod is seen ───────────────────────────
+# ── Rule 1: Tag the iPod's block devices (remove events lack the USB IDs) ────
 SUBSYSTEM=="block", \
   ENV{ID_VENDOR_ID}=="05ac", \
-  ENV{ID_MODEL_ID}=="1209", \
+  ENV{ID_MODEL_ID}=="12??", \
   TAG+="ipod_rockbox"
 
-# ── Rule 2: On connect, log the event, then run the sync ─────────────────────
+# ── Rule 2: FAT partition appeared → log it, then mount + sync ───────────────
 SUBSYSTEM=="block", \
-  ENV{ID_VENDOR_ID}=="05ac", \
-  ENV{ID_MODEL_ID}=="1209", \
   ACTION=="add", \
+  ENV{DEVTYPE}=="partition", \
+  ENV{ID_FS_TYPE}=="vfat", \
+  ENV{ID_VENDOR_ID}=="05ac", \
+  ENV{ID_MODEL_ID}=="12??", \
   RUN+="/usr/local/lib/ipod-sync/ipod-event.sh add", \
-  RUN+="/usr/local/lib/ipod-sync/udev-trigger.sh"
+  RUN+="/usr/local/lib/ipod-sync/udev-trigger.sh attach"
 
-# ── Rule 3: On disconnect, log the removal ───────────────────────────────────
-# On remove, USB attribute env vars aren't always populated, so match the tag
-# we set in Rule 1 instead of the vendor/model IDs.
+# ── Rule 3: partition removed → log it, drop any mount still pointing at it ──
 SUBSYSTEM=="block", \
   ACTION=="remove", \
+  ENV{DEVTYPE}=="partition", \
   TAG=="ipod_rockbox", \
-  RUN+="/usr/local/lib/ipod-sync/ipod-event.sh remove"
+  RUN+="/usr/local/lib/ipod-sync/ipod-event.sh remove", \
+  RUN+="/usr/local/lib/ipod-sync/udev-trigger.sh detach"

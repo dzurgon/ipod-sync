@@ -1,28 +1,24 @@
 #!/usr/bin/env bash
 # udev-trigger.sh — thin wrapper launched by udev (runs as root, minimal env)
-# Hands off to ipod-sync.sh running as the regular user via systemd-run.
+# Hands the iPod's partition to ipod-attach.sh in its own systemd unit.
 #
 # Deploy to: /usr/local/lib/ipod-sync/udev-trigger.sh
 # Must be executable and owned by root.
+#
+#   udev-trigger.sh attach   (on add)     mount → ipod-sync.sh as the sync user → unmount
+#   udev-trigger.sh detach   (on remove)  drop mounts left by an unplugged iPod
+#
+# Why systemd-run: systemd-udevd runs RUN+= programs with PrivateMounts=yes and kills
+# them after a short timeout, so mounts made here would be invisible and long syncs
+# would die. The transient unit runs in the host's mount namespace with no time limit;
+# its name is per device, so a duplicate event can't start a second sync.
 
-# Wait a moment for the filesystem to settle after the block device appears.
-sleep 3
+MODE="${1:-attach}"
+DEV="${DEVNAME:-}"
+[[ -n "$DEV" ]] || exit 0
 
-# Resolve the sync user from config (falls back to jimin). udev runs with almost
-# no environment, so we read the value directly rather than sourcing the whole file.
-CONFIG_FILE="/etc/ipod-sync/config.env"
-SYNC_USER="$(sed -n 's/^SYNC_USER=//p' "$CONFIG_FILE" 2>/dev/null | tr -d '\"'\''' | head -n1)"
-SYNC_USER="${SYNC_USER:-jimin}"
-
-# Run the real sync script as the regular user with a full environment.
-# IPOD_DEVNAME (udev's /dev/sdX) lets the sync identify *which* iPod this is.
-# systemd-run gives it a proper environment, cgroup, and journal logging.
-/usr/bin/systemd-run \
-  --unit=ipod-sync \
-  --uid="$SYNC_USER" \
-  --gid="$SYNC_USER" \
-  --setenv=CONFIG_FILE="$CONFIG_FILE" \
-  --setenv=IPOD_DEVNAME="${DEVNAME:-}" \
-  --pipe \
+exec /usr/bin/systemd-run \
+  --unit="ipod-${MODE}-$(basename "$DEV")" \
   --collect \
-  /usr/local/lib/ipod-sync/ipod-sync.sh
+  --quiet \
+  /usr/local/lib/ipod-sync/ipod-attach.sh "$MODE" "$DEV"

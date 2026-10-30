@@ -2,7 +2,8 @@
 # ipod-event.sh — log iPod connect/disconnect as a structured event.
 #
 # Deploy to: /usr/local/lib/ipod-sync/ipod-event.sh
-# Called by udev (99-ipod-rockbox.rules) on both add and remove, with $1 = action.
+# Called by udev (99-ipod-rockbox.rules) on both add and remove, with $1 = action,
+# and by ipod-attach.sh with "safe" once the iPod is unmounted after a sync.
 # This is independent of whether a full sync runs — so the web UI always shows
 # "iPod connected" / "iPod removed" even if the sync itself is skipped or fails.
 
@@ -18,6 +19,7 @@ mkdir -p "$LOG_DIR" 2>/dev/null || true
 case "$ACTION" in
   add|connect)    KIND=success; MSG="iPod connected" ;;
   remove|disconnect) KIND=info;  MSG="iPod removed" ;;
+  safe)           KIND=success; MSG="iPod unmounted — safe to unplug" ;;
   *)              KIND=info;     MSG="iPod event: $ACTION" ;;
 esac
 
