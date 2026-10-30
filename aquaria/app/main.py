@@ -15,13 +15,14 @@ import zipfile
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
+from fastapi.responses import FileResponse, HTMLResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import accounts, config, folder_art, indexer, ipods, library, playlists, state
 from .accounts import current_user, require_user
+from .indexer import IMAGE_EXTS
 
 conn = state.conn
 write_lock = state.write_lock
@@ -105,18 +106,30 @@ def _attachment(filename: str) -> dict:
                                    f"filename*=UTF-8''{urllib.parse.quote(filename)}"}
 
 
+def _image(request: Request, f: Path) -> Response:
+    """Artwork can be replaced in place under the same name, so make browsers revalidate
+    it every time (a cheap 304 while unchanged) instead of guessing freshness from age."""
+    st = f.stat()
+    etag = f'"{st.st_mtime_ns:x}-{st.st_size:x}"'
+    headers = {"Cache-Control": "no-cache", "ETag": etag}
+    if etag in request.headers.get("if-none-match", ""):
+        return Response(status_code=304, headers=headers)
+    return FileResponse(f, headers=headers)
+
+
 @app.get("/media/{rel_path:path}")
-def media(rel_path: str):
-    return FileResponse(_music_file(rel_path))
+def media(rel_path: str, request: Request):
+    f = _music_file(rel_path)
+    return _image(request, f) if f.suffix.lower() in IMAGE_EXTS else FileResponse(f)
 
 
 @app.get("/art/{folder:path}")
-def art(folder: str):
+def art(folder: str, request: Request):
     d = (config.MUSIC_ROOT / folder).resolve()
     for name in ("cover.jpg", "cover.png", "cover.jpeg", "cover.webp", "folder.jpg"):
         p = d / name
         if p.is_file():
-            return FileResponse(p)
+            return _image(request, p)
     raise HTTPException(404, "no art")
 
 

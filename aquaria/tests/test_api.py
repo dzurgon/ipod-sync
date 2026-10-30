@@ -87,6 +87,21 @@ def test_art_added_on_disk_shows_without_scan(client):
                 if g["rel_dir"] == genre)["image"] is None
 
 
+def test_artwork_is_revalidated_but_audio_is_not(client):
+    lib = Path(client.get("/healthz").json()["music_root"])
+    img = lib / "0_FOLK/Pete Seeger/Pete Seeger.jpg"
+    img.write_bytes(JPG)
+    r = client.get("/media/0_FOLK/Pete Seeger/Pete Seeger.jpg")
+    assert r.headers["cache-control"] == "no-cache" and r.headers.get("etag")
+    assert client.get("/media/0_FOLK/Pete Seeger/Pete Seeger.jpg",
+                      headers={"If-None-Match": r.headers["etag"]}).status_code == 304
+    img.write_bytes(PNG)                                   # replaced in place, same name
+    assert client.get("/media/0_FOLK/Pete Seeger/Pete Seeger.jpg",
+                      headers={"If-None-Match": r.headers["etag"]}).content == PNG
+    track = next(lib.rglob("*.flac")).relative_to(lib).as_posix()
+    assert "cache-control" not in client.get("/media/" + track).headers
+
+
 def test_scan_summary_counts(client):
     r = client.post("/api/scan").json()
     assert r["added"] == 0 and r["pruned"] == 0 and r["tracks"] > 0
