@@ -150,15 +150,42 @@ def text_prefix(buf: bytes) -> bytes:
 _STARTS = {ord("/"), ord("#"), 0xEF}
 
 
-def carve(fs: Fat32, out: Path, skip: set[int], chunk: int = 256) -> int:
+class DeviceGone(Exception):
+    pass
+
+
+def _read_chunk(fs: Fat32, start: int, n: int) -> bytes:
+    """Read n clusters; on an I/O error retry cluster by cluster (a bad cluster reads as
+    zeros). Many errors in a row means the device went away → DeviceGone(cluster)."""
+    try:
+        return fs.read_cluster(start, n)
+    except OSError:
+        pass
+    parts, bad = [], 0
+    for c in range(start, start + n):
+        try:
+            parts.append(fs.read_cluster(c))
+            bad = 0
+        except OSError:
+            parts.append(b"\x00" * fs.csize)
+            bad += 1
+            if bad >= 8:
+                raise DeviceGone(c - bad + 1)
+    return b"".join(parts)
+
+
+def carve(fs: Fat32, out: Path, skip: set[int], first: int = 2, chunk: int = 256) -> int:
     """Scan every free cluster (in big sequential reads) for one that starts a playlist."""
     fat = fs.fat()
     free = [c for c, (v,) in enumerate(struct.iter_unpack("<I", fat[:fs.nclusters * 4]))
-            if c >= 2 and not v & 0x0FFFFFFF]
+            if c >= max(first, 2) and not v & 0x0FFFFFFF]
     total = len(free)
-    print(f"\nCarving {total:,} free clusters ({total * fs.csize / 1e9:.0f} GB) for playlist text "
-          f"(Ctrl-C to stop)…", flush=True)
-    seen_hash, found, done, t0, last = set(), 0, 0, time.time(), 0.0
+    print(f"\nCarving {total:,} free clusters ({total * fs.csize / 1e9:.0f} GB) from cluster {max(first, 2):,} "
+          f"for playlist text (Ctrl-C to stop)…", flush=True)
+    # contents already recovered by an earlier run into the same folder aren't saved again
+    seen_hash = {hashlib.sha1(f.read_bytes()).hexdigest() for f in out.glob("*") if f.is_file()} \
+        if out.is_dir() else set()
+    found, done, t0, last = 0, 0, time.time(), 0.0
     i = 0
     while i < total:
         # one sequential read over a run of consecutive free clusters
@@ -166,7 +193,7 @@ def carve(fs: Fat32, out: Path, skip: set[int], chunk: int = 256) -> int:
         while j < total and j - i < chunk and free[j] == free[j - 1] + 1:
             j += 1
         start, n = free[i], j - i
-        buf = fs.read_cluster(start, n)
+        buf = _read_chunk(fs, start, n)
         for k in range(n):
             off = k * fs.csize
             if start + k in skip or not buf[off:off + 1] or buf[off] not in _STARTS:
@@ -194,8 +221,8 @@ def carve(fs: Fat32, out: Path, skip: set[int], chunk: int = 256) -> int:
         if now - last > 30:
             last, rate = now, done * fs.csize / max(now - t0, 1e-6)
             eta = (total - done) * fs.csize / max(rate, 1)
-            print(f"  … {100 * done / total:.1f}%  {rate / 1e6:.0f} MB/s  ~{eta / 60:.0f} min left",
-                  flush=True)
+            print(f"  … {100 * done / total:.1f}%  {rate / 1e6:.0f} MB/s  ~{eta / 60:.0f} min left"
+                  f"  (cluster {start + n:,})", flush=True)
     return found
 
 
@@ -218,6 +245,8 @@ def main() -> int:
     ap.add_argument("--ext", nargs="+", default=[".m3u8", ".m3u"])
     ap.add_argument("--carve", action="store_true",
                     help="also scan all free space for playlist text (slow: reads the whole free area)")
+    ap.add_argument("--from-cluster", type=int, default=2, metavar="N",
+                    help="resume an interrupted --carve at cluster N (printed when it stops)")
     a = ap.parse_args()
     exts = tuple(x.lower() for x in a.ext)
     out = Path(a.out).expanduser()
@@ -256,9 +285,13 @@ def main() -> int:
 
     if a.carve:
         try:
-            found += carve(fs, out, seen_clusters)
+            found += carve(fs, out, seen_clusters, a.from_cluster)
         except KeyboardInterrupt:
             print("\n  stopped.")
+        except DeviceGone as e:
+            print(f"\n  The device stopped responding at cluster {e.args[0]:,} (unplugged or asleep?)."
+                  f"\n  Resume with: --carve --from-cluster {e.args[0]}", flush=True)
+            return 1
 
     print(f"\n{found} playlist(s) recovered into {out}" if found else "\nNothing recovered.")
     return 0
