@@ -80,6 +80,8 @@ def test_pull_playlist_from_ipod_and_report(client):
     pl = client.get(f"/api/playlists/{r.json()['id']}").json()
     assert pl["is_public"] is False and pl["items"][0]["title"] == "360"
     assert (client.pls / "jimin" / "made on ipod.m3u").exists()
+    act = client.get("/api/activity").json()["activity"][0]
+    assert act["detail"] == {"playlist_id": pl["id"], "playlist": "made on ipod"}   # UI links it
 
     client.post(f"/api/host/ipods/{SIG}/report", headers=H,
                 json={"status": "ok", "message": "Synced 14 tracks", "stats": {"tracks": 14}})

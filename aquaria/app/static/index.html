@@ -168,6 +168,8 @@
          border-radius:12px;padding:10px 14px;font-size:13px;opacity:0;transform:translateY(-8px);
          transition:.2s;pointer-events:none}
   .toast.on{opacity:1;transform:none}
+  .toast.on.linky{pointer-events:auto}
+  .toast a, a.pl-link{color:var(--aqua);text-decoration:underline;text-underline-offset:2px}
 
   /* Add-to-playlist popover */
   .pop{position:absolute;z-index:25;background:#022b33;border:1px solid var(--aqua);border-radius:12px;
@@ -242,10 +244,17 @@ async function api(path, opts){
 const post = (path, data, method="POST") => api(path, {method,
   headers:{"Content-Type":"application/json"}, body: data ? JSON.stringify(data) : undefined});
 
-function toast(msg){
-  const t=$("#toast"); t.textContent=msg; t.classList.add("on");
-  clearTimeout(toast.h); toast.h=setTimeout(()=>t.classList.remove("on"),2200);
+// html=true: msg is trusted markup (e.g. a plLink) — stays up longer and is clickable.
+function toast(msg, html=false){
+  const t=$("#toast");
+  if(html) t.innerHTML = msg; else t.textContent = msg;
+  t.classList.toggle("linky", html); t.classList.add("on");
+  clearTimeout(toast.h); toast.h=setTimeout(()=>t.classList.remove("on"), html ? 4500 : 2200);
 }
+$("#toast").addEventListener("click", e=>{ if(e.target.closest("a")) $("#toast").classList.remove("on"); });
+
+// A playlist's name, linking to its page.
+const plLink = (id, name) => `<a class="pl-link" data-link href="/playlist/${id}">${esc(name)}</a>`;
 
 async function loadStats(){
   const s = await api("/api/stats");
@@ -310,7 +319,8 @@ document.addEventListener("click", e=>{ if(!e.target.closest(".pop,[data-add]"))
 async function addTo(pid, payload){
   const r = await post(`/api/playlists/${pid}/tracks`, payload);
   const p = MINE.find(x=>x.id===pid);
-  toast(r.added ? `Added ${r.added} to ${p?p.name:"playlist"}` : "Already in playlist");
+  const link = plLink(pid, p ? p.name : "playlist");
+  toast(r.added ? `Added ${r.added} to ${link}` : `Already in ${link}`, true);
   loadPlaylists();
 }
 
@@ -860,7 +870,7 @@ async function renderIpods(){
   const card = ip => {
     const s = ip.sync, sum = ip.summary;
     const pick = (list, own) => list.map(p=>`<label><input type="checkbox" name="pl" value="${p.id}" ${s.playlists.includes(p.id)?'checked':''} ${own && s.own_playlists ? 'disabled checked' : ''}>
-        ${esc(p.name)}${p.is_mine ? lock(p) : ` <small class="sub">by ${esc(p.owner)}</small>`}</label>`).join("");
+        ${plLink(p.id, p.name)}${p.is_mine ? lock(p) : ` <small class="sub">by ${esc(p.owner)}</small>`}</label>`).join("");
     return `<div class="card" data-ipod="${ip.id}">
       <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap">
         <div><h3>📟 ${esc(ip.name)}</h3>
@@ -929,6 +939,15 @@ async function renderIpods(){
 }
 
 // ── Activity: the logged-in user's iPod + playlist history ──────────────────
+// Activity text, with the playlist it mentions (“Name”) linked when the entry records one.
+function actMessage(a){
+  const msg = esc(a.message), d = a.detail || {};
+  if(!d.playlist_id || !d.playlist) return msg;
+  const q = `“${esc(d.playlist)}”`;
+  return msg.includes(q) ? msg.replace(q, `“${plLink(d.playlist_id, d.playlist)}”`)
+                         : `${msg} · ${plLink(d.playlist_id, d.playlist)}`;
+}
+
 async function renderActivity(){
   setTitle("Activity");
   if(!ME) return loginPrompt("see your iPod activity");
@@ -939,7 +958,7 @@ async function renderActivity(){
   $("#panel").innerHTML = `<h2>Activity</h2>
     ${activity.length ? `<div class="list">${activity.map(a=>`<div class="row">
       <div class="num" style="width:auto">${icon[a.kind]||"•"}</div>
-      <div class="main">${esc(a.message)}${a.detail?.status && a.detail.status!=="ok" ? ` ${statusPill(a.detail.status)}` : ""}</div>
+      <div class="main">${actMessage(a)}${a.detail?.status && a.detail.status!=="ok" ? ` ${statusPill(a.detail.status)}` : ""}</div>
       <small class="r-genre">${new Date(a.ts*1000).toLocaleString()}</small></div>`).join("")}</div>`
     : `<div class="empty">Nothing yet — link an iPod on the My iPod tab and plug it in.</div>`}`;
 }

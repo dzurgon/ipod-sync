@@ -351,7 +351,8 @@ def host_import_playlist(sig: str, body: PulledPlaylist):
         if not ip["sync"]["own_playlists"]:
             sync = ip["sync"] | {"playlists": ip["sync"]["playlists"] + [pid]}
             state.conn.execute("UPDATE ipods SET sync=? WHERE id=?", (json.dumps(sync), ip["id"]))
-        _activity(ip["user_id"], ip["id"], "playlist", f"Imported “{name}” from {ip['name']}")
+        _activity(ip["user_id"], ip["id"], "playlist", f"Imported “{name}” from {ip['name']}",
+                  {"playlist_id": pid, "playlist": name})
         state.conn.commit()
     return {"id": pid, "name": name}
 
