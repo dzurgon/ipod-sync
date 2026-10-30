@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import hmac
 import json
+import re
 import time
 
 from typing import Literal
@@ -39,7 +40,8 @@ from .parser import parse_genre
 
 router = APIRouter()
 
-IPOD_MUSIC_DIR = "FLAC"          # music folder at the iPod root (matches ipod-sync.sh)
+IPOD_MUSIC_DIR = "FLAC"
+_ROCKBOX_VOLUME = re.compile(r"^/<[A-Za-z]+\d*>(?=/)")          # music folder at the iPod root (matches ipod-sync.sh)
 DEFAULT_SYNC = {"music": "all", "genres": [], "own_playlists": True, "playlists": [],
                 "scrobble": True}
 
@@ -336,7 +338,9 @@ def host_import_playlist(sig: str, body: PulledPlaylist):
     if not ip:
         raise HTTPException(404, "iPod not linked")
     prefix = f"/{IPOD_MUSIC_DIR}/"
-    lines = [l[len(prefix):] if l.startswith(prefix) else l.lstrip("/") for l in body.lines]
+    # Rockbox may write paths with a volume prefix: /<HDD0>/FLAC/… (or <MMC1>, <SD0>…)
+    lines = [_ROCKBOX_VOLUME.sub("", l) for l in body.lines]
+    lines = [l[len(prefix):] if l.startswith(prefix) else l.lstrip("/") for l in lines]
     base = playlists.safe_name(body.name) or "iPod playlist"
     with state.write_lock:
         for n in range(1, 50):

@@ -13,7 +13,10 @@ environment (ipod-sync.sh sources /etc/ipod-sync/aquaria.env). Subcommands:
                                       a new marker. Writes metadata to M/.aquaria/host.json
   seen      --mount M --sig S         register with Aquaria. exit 0 linked · 10 not linked
                                       · 20 Aquaria unreachable / host API disabled
-  pull      --mount M --sig S         import playlists created on the iPod (not ones we pushed)
+  pull      --mount M --sig S         import playlists created on the iPod (.m3u/.m3u8, not ones
+                                      we pushed); each original is kept as <name>.imported
+  prune     --mount M --pushed FILE   delete playlists we pushed before that left the plan
+                                      (never touches playlists made on the iPod)
   stage     --mount M --sig S --music-root R --out DIR
             builds DIR/music      symlink tree: <iPod path> -> <server file/folder>
                    DIR/playlists  the .m3u files this iPod should hold
@@ -163,15 +166,37 @@ def cmd_pull(a) -> int:
     plan = api("GET", sig_path(a.sig) + "/plan")
     known = {p["name"].casefold() for p in plan["playlists"]} | {n.casefold() for n in pushed}
     n = 0
-    for f in sorted(pdir.glob("*.m3u")) if pdir.is_dir() else []:
+    files = [f for f in pdir.iterdir() if f.is_file() and f.suffix.lower() in (".m3u", ".m3u8")
+             and not f.name.startswith("._")] if pdir.is_dir() else []
+    for f in sorted(files):
         if f.stem.casefold() in known:
             continue
-        lines = [l.strip() for l in f.read_text(errors="replace").splitlines()
+        lines = [l.strip() for l in f.read_text(encoding="utf-8", errors="replace").lstrip("\ufeff").splitlines()
                  if l.strip() and not l.startswith("#")]
         r = api("POST", sig_path(a.sig) + "/playlists", {"name": f.stem, "lines": lines})
-        print(f"  imported playlist from iPod: {f.name} -> {r['name']}")
+        # Saved on the server now; it comes back as <name>.m3u in the push. Keep the
+        # original as a backup Rockbox won't list (so the iPod doesn't show it twice).
+        f.rename(f.with_name(f.name + ".imported"))
+        print(f"  imported playlist from iPod: {f.name} -> {r['name']} (original kept as {f.name}.imported)")
         n += 1
     print(f"  {n} new playlist(s) imported from the iPod.")
+    return 0
+
+
+def cmd_prune(a) -> int:
+    """Remove playlists *we* pushed last time that aren't in this push. Anything else in
+    the folder (made on the iPod, or by another tool) is never touched."""
+    pdir = Path(a.mount) / "Playlists"
+    try:
+        before = set(json.loads((Path(a.mount) / STATE_DIR / "pushed.json").read_text()))
+    except (OSError, ValueError):
+        before = set()
+    now = set(json.loads(Path(a.pushed).read_text()))
+    for name in sorted(before - now):
+        f = pdir / (_safe_name(name) + ".m3u")
+        if f.is_file():
+            f.unlink()
+            print(f"  removed playlist no longer synced to this iPod: {f.name}")
     return 0
 
 
@@ -243,13 +268,14 @@ def main() -> int:
     p = sub.add_parser("pull"); p.add_argument("--mount", required=True); p.add_argument("--sig", required=True)
     p = sub.add_parser("stage"); p.add_argument("--mount", required=True); p.add_argument("--sig", required=True)
     p.add_argument("--music-root", required=True); p.add_argument("--out", required=True)
+    p = sub.add_parser("prune"); p.add_argument("--mount", required=True); p.add_argument("--pushed", required=True)
     p = sub.add_parser("report"); p.add_argument("--sig", required=True)
     p.add_argument("--status", required=True, choices=["syncing", "ok", "warning", "error", "unmounting", "safe"])
     p.add_argument("--message", default=""); p.add_argument("--stats", default="")
     a = ap.parse_args()
     try:
-        return {"identify": cmd_identify, "seen": cmd_seen, "pull": cmd_pull,
-                "stage": cmd_stage, "report": cmd_report}[a.cmd](a)
+        return {"identify": cmd_identify, "seen": cmd_seen, "pull": cmd_pull, "stage": cmd_stage,
+                "prune": cmd_prune, "report": cmd_report}[a.cmd](a)
     except Unreachable as e:
         print(f"Aquaria error: {e}", file=sys.stderr)
         return 20

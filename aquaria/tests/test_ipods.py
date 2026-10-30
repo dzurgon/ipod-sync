@@ -113,6 +113,14 @@ def test_sync_in_progress_then_result(client):
                        json={"status": "bogus"}).status_code == 422
 
 
+def test_rockbox_m3u8_paths_imported(client):
+    seen(client); link(client)
+    r = client.post(f"/api/host/ipods/{SIG}/playlists", headers=H, json={
+        "name": "SUM", "lines": ["/<HDD0>/FLAC/0_POP/Charli XCX/BRAT (2025)/01 - 360.flac"]})
+    pl = client.get(f"/api/playlists/{r.json()['id']}").json()
+    assert [i["title"] for i in pl["items"]] == ["360"]
+
+
 def test_unlink(client):
     seen(client); ip = link(client)
     client.delete(f"/api/ipods/{ip['id']}")

@@ -202,18 +202,20 @@ if [[ "$MODE" == "aquaria" ]]; then
     || rsync_soft_fail $?
   log "Music sync complete."
 
-  # 3c. Playlists: exactly the plan's set (iPod-made ones were imported in 3a)
+  # 3c. Playlists: write the plan's set. Never --delete here: the folder also holds
+  #     playlists made on the iPod. Only ones *we* pushed before and that left the plan
+  #     are removed (prune compares the old and new pushed.json).
   section "Syncing playlists"
   rsync \
     --recursive \
     --checksum \
-    --delete \
     --human-readable \
     --log-file="$LOGFILE" \
     --log-file-format='%t [playlists] %o %f' \
     "$STAGE/playlists/" \
     "$IPOD_PLAYLIST_DIR/" \
     | tee -a "$LOGFILE"
+  python3 "$AQUARIA_SYNC" prune --mount "$IPOD_MOUNT" --pushed "$STAGE/pushed.json" 2>&1 | tee -a "$LOGFILE"
   cp "$STAGE/pushed.json" "$IPOD_MOUNT/.aquaria/pushed.json"
   log "Playlist sync complete."
 else
@@ -279,16 +281,16 @@ while IFS= read -r -d '' pls; do
     log "  Pulled new playlist: $filename"
     NEW_PLAYLISTS=$(( NEW_PLAYLISTS + 1 ))
   fi
-done < <(find "$IPOD_PLAYLIST_DIR" -name '*.m3u' -print0 2>/dev/null)
+done < <(find "$IPOD_PLAYLIST_DIR" \( -iname '*.m3u' -o -iname '*.m3u8' \) -print0 2>/dev/null)
 
 log "  $NEW_PLAYLISTS new playlist(s) pulled from iPod."
 
-# 3b. Push all server playlists → iPod (server is authoritative for edits)
+# 3b. Push all server playlists → iPod (server is authoritative for edits). No --delete:
+#     never remove playlists from the iPod that the server doesn't know about.
 log "Pushing server playlists → iPod..."
 rsync \
-  --archive \
+  --recursive \
   --checksum \
-  --delete \
   --human-readable \
   --log-file="$LOGFILE" \
   --log-file-format='%t [playlists] %o %f' \
