@@ -18,8 +18,11 @@ clusters, for files whose directory entries were overwritten since.
 from __future__ import annotations
 
 import argparse
+import hashlib
+import re
 import struct
 import sys
+import time
 from pathlib import Path
 
 DELETED = 0xE5
@@ -126,6 +129,76 @@ def looks_like_playlist(data: bytes) -> bool:
     return bool(tracks) and sum(l.lower().endswith(AUDIO) for l in tracks) >= 0.8 * len(tracks)
 
 
+_NOT_TEXT = re.compile(rb"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+
+
+def text_prefix(buf: bytes) -> bytes:
+    """The leading run of buf that is valid UTF-8 text — a file's data, minus whatever
+    stale bytes follow its end inside the last cluster."""
+    m = _NOT_TEXT.search(buf)
+    t = buf[:m.start()] if m else buf
+    while t:
+        try:
+            t.decode("utf-8")
+            return t
+        except UnicodeDecodeError as e:
+            t = t[:e.start]
+    return t
+
+
+# A playlist cluster starts with a path ("/FLAC/…"), a #comment/#EXTM3U, or a UTF-8 BOM.
+_STARTS = {ord("/"), ord("#"), 0xEF}
+
+
+def carve(fs: Fat32, out: Path, skip: set[int], chunk: int = 256) -> int:
+    """Scan every free cluster (in big sequential reads) for one that starts a playlist."""
+    fat = fs.fat()
+    free = [c for c, (v,) in enumerate(struct.iter_unpack("<I", fat[:fs.nclusters * 4]))
+            if c >= 2 and not v & 0x0FFFFFFF]
+    total = len(free)
+    print(f"\nCarving {total:,} free clusters ({total * fs.csize / 1e9:.0f} GB) for playlist text "
+          f"(Ctrl-C to stop)…", flush=True)
+    seen_hash, found, done, t0, last = set(), 0, 0, time.time(), 0.0
+    i = 0
+    while i < total:
+        # one sequential read over a run of consecutive free clusters
+        j = i + 1
+        while j < total and j - i < chunk and free[j] == free[j - 1] + 1:
+            j += 1
+        start, n = free[i], j - i
+        buf = fs.read_cluster(start, n)
+        for k in range(n):
+            off = k * fs.csize
+            if start + k in skip or not buf[off:off + 1] or buf[off] not in _STARTS:
+                continue
+            text = text_prefix(buf[off:])             # may run into the next free clusters
+            # drop stale bytes after the file's end: keep through the last complete track line
+            lines = text.splitlines(keepends=True)
+            while lines and not lines[-1].rstrip().lower().endswith(AUDIO):
+                lines.pop()
+            text = b"".join(lines)
+            if len(text) < 20 or not looks_like_playlist(text):
+                continue
+            h = hashlib.sha1(text).hexdigest()
+            if h in seen_hash:
+                continue
+            seen_hash.add(h)
+            first = text.lstrip(b"\xef\xbb\xbf").split(b"\n", 1)[0][:90].decode("utf-8", "replace")
+            p = save(out, f"carved-cluster-{start + k}.m3u8", text)
+            found += 1
+            print(f"  cluster {start + k}: {sum(1 for l in text.splitlines() if l.strip())} lines, first: {first}\n    → {p}",
+                  flush=True)
+        done += n
+        i = j
+        now = time.time()
+        if now - last > 30:
+            last, rate = now, done * fs.csize / max(now - t0, 1e-6)
+            eta = (total - done) * fs.csize / max(rate, 1)
+            print(f"  … {100 * done / total:.1f}%  {rate / 1e6:.0f} MB/s  ~{eta / 60:.0f} min left",
+                  flush=True)
+    return found
+
+
 def save(out: Path, name: str, data: bytes) -> Path:
     out.mkdir(parents=True, exist_ok=True)
     safe = "".join("_" if c in '/\\:*?"<>|' else c for c in name) or "recovered.m3u8"
@@ -161,8 +234,11 @@ def main() -> int:
     print(f"\n/{a.dir} — deleted entries:")
     seen_clusters = set()
     for name, attr, cl, size, deleted in entries(fs.chain(dc)):
-        if not deleted or attr & ATTR_DIR or not name.lower().endswith(exts) or name.startswith("._"):
-            continue                                 # ._* = macOS metadata, not a playlist
+        if not deleted:
+            continue
+        if attr & ATTR_DIR or not name.lower().endswith(exts) or name.startswith("._"):
+            print(f"  {name}: not a playlist — skipped")   # ._* = macOS metadata
+            continue
         if cl < 2 or cl >= fs.nclusters or size == 0:
             print(f"  {name}: no data recorded (size {size}) — skipped")
             continue
@@ -179,21 +255,10 @@ def main() -> int:
             print(f"    → {p}")
 
     if a.carve:
-        print("\nCarving free clusters for playlist text (Ctrl-C to stop)…")
-        fat = fs.fat()
-        for c in range(2, fs.nclusters):
-            if c % 200000 == 0:
-                print(f"  … {100 * c / fs.nclusters:.1f}%", flush=True)
-            if struct.unpack_from("<I", fat, c * 4)[0] & 0x0FFFFFFF or c in seen_clusters:
-                continue
-            data = fs.read_cluster(c)
-            if not data.strip(b"\x00"):
-                continue
-            text = data.split(b"\x00", 1)[0]
-            if len(text) > 20 and looks_like_playlist(text):
-                p = save(out, f"carved-cluster-{c}.m3u8", text)
-                found += 1
-                print(f"  cluster {c}: {len(text)} bytes → {p}")
+        try:
+            found += carve(fs, out, seen_clusters)
+        except KeyboardInterrupt:
+            print("\n  stopped.")
 
     print(f"\n{found} playlist(s) recovered into {out}" if found else "\nNothing recovered.")
     return 0
