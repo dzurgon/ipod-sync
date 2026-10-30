@@ -75,6 +75,24 @@ def test_same_name_convention_detected_on_scan(client):
     assert _folders(client)["0_FOLK/Pete Seeger"]["image"] == "0_FOLK/Pete Seeger/pete seeger.JPG"
 
 
+def test_art_added_on_disk_shows_without_scan(client):
+    lib = Path(client.get("/healthz").json()["music_root"])
+    genre = client.get("/api/folder-art").json()["genres"][0]["rel_dir"]
+    img = lib / genre / f"{genre}.jpg"
+    img.write_bytes(JPG)
+    assert next(g for g in client.get("/api/folder-art").json()["genres"]
+                if g["rel_dir"] == genre)["image"] == f"{genre}/{genre}.jpg"
+    img.unlink()                                           # and removal is noticed too
+    assert next(g for g in client.get("/api/folder-art").json()["genres"]
+                if g["rel_dir"] == genre)["image"] is None
+
+
+def test_scan_summary_counts(client):
+    r = client.post("/api/scan").json()
+    assert r["added"] == 0 and r["pruned"] == 0 and r["tracks"] > 0
+    assert {"folder_images", "playlists", "seconds"} <= r.keys()
+
+
 def test_upload_writes_convention_file(client):
     lib = Path(client.get("/healthz").json()["music_root"])
     r = client.post("/api/folder-art/upload", data={"rel_dir": "0_FOLK/Pete Seeger"},

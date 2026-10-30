@@ -310,6 +310,12 @@ class FolderRef(BaseModel):
 
 @app.get("/api/folder-art")
 def folder_art_list():
+    # Pick up artwork added on disk since the last scan; skip if a scan holds the lock.
+    if write_lock.acquire(blocking=False):
+        try:
+            indexer.refresh_folder_images(conn, config.MUSIC_ROOT)
+        finally:
+            write_lock.release()
     return {
         "genres": [dict(r) for r in conn.execute(
             "SELECT rel_dir, genre, image FROM genre_folders ORDER BY rel_dir")],
