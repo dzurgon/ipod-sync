@@ -303,7 +303,8 @@ class PulledPlaylist(BaseModel):
 
 
 class Report(BaseModel):
-    status: Literal["syncing", "ok", "warning", "error"]   # syncing = a sync just started
+    # ok | warning | error = a sync's result. syncing → unmounting → safe = live state only.
+    status: Literal["syncing", "ok", "warning", "error", "unmounting", "safe"]
     message: str = ""
     stats: dict = {}
 
@@ -378,6 +379,8 @@ def host_report(sig: str, body: Report):
                                (json.dumps(meta), now, sig))
         if ip and body.status == "syncing":
             _activity(ip["user_id"], ip["id"], "sync", f"Sync of {ip['name']} started")
+        elif ip and body.status in ("unmounting", "safe"):
+            pass                                  # live state only; the result is already in
         elif ip:
             state.conn.execute("UPDATE ipods SET last_sync=?, last_status=? WHERE id=?",
                                (now, f"{body.status}: {body.message}"[:300], ip["id"]))

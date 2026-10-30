@@ -827,6 +827,10 @@ function ipodStatus(ip){
   // A sync can outlast the 15-min "connected" window; 12 h covers a full first copy.
   const syncing = st === "syncing" && now - (ip.host.sync_started||0) < 43200;
   const live = syncing ? `<span class="pill sync">⟳ Sync in progress · started ${ago(ip.host.sync_started)}</span><br>`
+    : st === "unmounting" && now - (ip.last_seen||0) < 3600
+    ? `<span class="pill sync">⏳ Finishing writes — don't unplug yet</span><br>`
+    : st === "safe" && now - (ip.last_seen||0) < 900
+    ? `<span class="pill ok">✓ Synced · safe to unplug</span><br>`
     : st && now - (ip.last_seen||0) < 900
     ? `<span class="pill ok">● connected${{ok:" · synced", warning:" · synced with warnings", error:" · sync failed"}[st]||""}</span><br>`
     : "";

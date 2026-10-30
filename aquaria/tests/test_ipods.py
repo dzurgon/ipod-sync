@@ -104,6 +104,11 @@ def test_sync_in_progress_then_result(client):
     assert mine["last_status"] == "ok: Synced"
     msgs = [a["message"] for a in client.get("/api/activity").json()["activity"]]
     assert msgs[0] == "Synced" and msgs[1].startswith("Sync of ") and msgs[1].endswith(" started")
+    for live in ("unmounting", "safe"):                      # state only, result kept
+        client.post(f"/api/host/ipods/{SIG}/report", headers=H, json={"status": live})
+        mine = client.get("/api/ipods").json()["ipods"][0]
+        assert mine["host"]["state"] == live and mine["last_status"] == "ok: Synced"
+    assert len(client.get("/api/activity").json()["activity"]) == len(msgs)
     assert client.post(f"/api/host/ipods/{SIG}/report", headers=H,
                        json={"status": "bogus"}).status_code == 422
 

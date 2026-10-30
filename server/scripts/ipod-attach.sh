@@ -23,6 +23,17 @@ BASE="$(cfg IPOD_MOUNT_PATH)"; BASE="${BASE:-/mnt/ipod}"
 
 log() { echo "[ipod-attach] $*"; }   # → journal (journalctl -u 'ipod-attach-*')
 
+# Set from what ipod-sync.sh writes to $STATE: its log file and the iPod's signature.
+IPOD_LOGFILE=""; IPOD_SIG=""
+# Log to the journal and append to the sync's own log, so that log ends with the outcome.
+note() { log "$*"; [[ -n "$IPOD_LOGFILE" ]] && echo "[$(date '+%F %T')] $*" >> "$IPOD_LOGFILE"; }
+# Tell Aquaria (if this iPod is linked) what's happening: unmounting | safe | warning.
+aq_report() {
+  [[ -n "$IPOD_SIG" && -r /etc/ipod-sync/aquaria.env ]] || return 0
+  ( set -a; . /etc/ipod-sync/aquaria.env; set +a
+    python3 "$LIB/aquaria_sync.py" report --sig "$IPOD_SIG" "$@" ) >/dev/null 2>&1 || true
+}
+
 # Unmount whatever is stacked at $1 while the top mount is dead: its device is gone
 # (unplugged without unmounting) or it errors on access. Returns 1 if a live mount
 # remains (another iPod is using this path), 0 once the path is free.
@@ -68,8 +79,17 @@ if [[ -z "$MP" ]]; then
     clear_stale "$MP" || { log "both $BASE and $MP are busy — giving up"; exit 1; }
   fi
   mkdir -p "$MP"
+  # Repair first: an iPod unplugged mid-write (or never unmounted) is left dirty, and a
+  # dirty FAT can lose files or misreport sizes. -a fixes what it can automatically.
+  fsck_out="$(fsck.vfat -a "$DEV" 2>&1)"; rc=$?
+  case $rc in
+    0) log "filesystem check of $DEV: clean" ;;
+    1) log "filesystem check of $DEV: repaired errors"; log "$fsck_out" ;;
+    *) log "WARN: filesystem check of $DEV failed (exit $rc) — mounting anyway"; log "$fsck_out" ;;
+  esac
   # utf8: vfat long names are UTF-16 on disk; utf8 maps them faithfully (iso8859-1 can't).
-  if ! mount -t vfat -o "uid=$(id -u "$SYNC_USER"),gid=$(id -g "$SYNC_USER"),umask=022,utf8,shortname=mixed,errors=remount-ro" \
+  # flush: write data out as it goes, so the wait at unmount stays short.
+  if ! mount -t vfat -o "uid=$(id -u "$SYNC_USER"),gid=$(id -g "$SYNC_USER"),umask=022,utf8,shortname=mixed,flush,errors=remount-ro" \
        "$DEV" "$MP"; then
     log "could not mount $DEV at $MP"
     exit 1
@@ -78,22 +98,40 @@ if [[ -z "$MP" ]]; then
   log "mounted $DEV at $MP"
 fi
 
+STATE="$(mktemp /tmp/ipod-attach-state.XXXXXX)"
+chown "$SYNC_USER" "$STATE"
+trap 'rm -f "$STATE"' EXIT
+
 runuser -u "$SYNC_USER" -- env \
   HOME="$(getent passwd "$SYNC_USER" | cut -d: -f6)" \
   CONFIG_FILE="$CONFIG_FILE" \
   IPOD_DEVNAME="$DEV" \
   IPOD_MOUNT_OVERRIDE="$MP" \
   IPOD_MANAGED_MOUNT=1 \
+  IPOD_STATE_FILE="$STATE" \
   "$LIB/ipod-sync.sh"
 rc=$?
+IPOD_LOGFILE="$(sed -n 's/^IPOD_LOGFILE=//p' "$STATE")"
+IPOD_SIG="$(sed -n 's/^IPOD_SIG=//p' "$STATE")"
 
+aq_report --status unmounting
+note "writing the last changes to the iPod — don't unplug yet"
 sync
 if (( OWN )); then
-  if umount "$MP"; then
-    log "unmounted $MP — safe to unplug"
+  umount "$MP"; urc=$?
+  if [[ ! -b "$DEV" ]]; then
+    # The device vanished while we were still writing: umount "succeeds" on a dead device.
+    note "WARN: the iPod was unplugged before writes finished — plug it back in; it'll be checked, repaired and re-synced"
+    aq_report --status warning --message "Unplugged before writes finished — plug it back in to repair and re-sync"
+    rc=1
+  elif (( urc == 0 )); then
+    note "unmounted $MP — safe to unplug"
+    aq_report --status safe
     "$LIB/ipod-event.sh" safe || true
   else
-    log "WARN: could not unmount $MP (busy?) — run 'sudo umount $MP' before unplugging"
+    note "WARN: could not unmount $MP (busy?) — run 'sudo umount $MP' before unplugging"
   fi
+else
+  [[ -b "$DEV" ]] && aq_report --status safe   # someone else's mount: synced + flushed
 fi
 exit "$rc"

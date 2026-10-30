@@ -29,6 +29,9 @@ source "$CONFIG_FILE"
 LOG_DIR="${LOG_DIR:-/var/log/ipod-sync}"
 mkdir -p "$LOG_DIR"
 LOGFILE="$LOG_DIR/ipod-sync-$(date '+%Y%m%d-%H%M%S').log"
+# ipod-attach.sh passes a file to tell it this log + the iPod's signature, so it can
+# log and report the unmount ("safe to unplug") after we exit.
+[[ -n "${IPOD_STATE_FILE:-}" ]] && echo "IPOD_LOGFILE=$LOGFILE" > "$IPOD_STATE_FILE"
 EVENT_SOURCE="sync"
 
 # Keep only the last 30 sync logs
@@ -110,6 +113,7 @@ export AQUARIA_URL AQUARIA_HOST_TOKEN
 if [[ -n "${AQUARIA_HOST_TOKEN:-}" && -f "$AQUARIA_SYNC" ]]; then
   IPOD_SIG="$(python3 "$AQUARIA_SYNC" identify --mount "$IPOD_MOUNT" --devname "${IPOD_DEVNAME:-}")"
   log "iPod signature: $IPOD_SIG"
+  [[ -n "${IPOD_STATE_FILE:-}" ]] && echo "IPOD_SIG=$IPOD_SIG" >> "$IPOD_STATE_FILE"
   set +e
   WHO="$(python3 "$AQUARIA_SYNC" seen --mount "$IPOD_MOUNT" --sig "$IPOD_SIG" 2>>"$LOGFILE")"
   rc=$?
@@ -147,12 +151,15 @@ emit_event sync info "iPod sync started" "$(basename "$LOGFILE")"
 section "Syncing music: server → iPod"
 
 # rsync exit codes 23/24 (skipped / vanished files) are non-fatal; 25 = --max-delete hit.
+SKIPPED=0
 rsync_soft_fail() {
   local code=$1
   if [[ $code -eq 23 || $code -eq 24 ]]; then
-    warn "rsync finished with skipped files (code $code)."
-    warn "Likely cause: folder names with special characters (♯ ∞ trailing spaces) that"
-    warn "vfat cannot store. Run 'beet import -q' on those albums to rename them cleanly."
+    sleep 1                                   # let the stderr tee finish writing
+    SKIPPED="$(grep -c '^rsync: .*failed' "$LOGFILE" || true)"; SKIPPED="${SKIPPED:-1}"
+    warn "rsync finished with ${SKIPPED} file(s) not copied (code $code) — see the 'rsync:' lines above."
+    warn "Likely cause: names the iPod's FAT filesystem can't store (: ? * \" < > | or a"
+    warn "trailing dot/space). Rename those files on the server."
   elif [[ $code -eq 25 ]]; then
     die "rsync stopped: it would delete more than $IPOD_MAX_DELETE files from the iPod. If you just shrank what this iPod syncs, set IPOD_MAX_DELETE higher in config.env for one sync."
   else
@@ -191,6 +198,7 @@ if [[ "$MODE" == "aquaria" ]]; then
     --log-file-format='%t [rsync] %o %f (%b bytes)' \
     "$STAGE/music/" \
     "$IPOD_MUSIC_DIR/" \
+    2> >(tee -a "$LOGFILE" >&2) \
     || rsync_soft_fail $?
   log "Music sync complete."
 
@@ -247,6 +255,7 @@ rsync \
   --log-file-format='%t [rsync] %o %f (%b bytes)' \
   "$MUSIC_DIR/" \
   "$IPOD_MUSIC_DIR/" \
+  2> >(tee -a "$LOGFILE" >&2) \
   || rsync_soft_fail $?
 
 log "Music sync complete."
@@ -341,8 +350,14 @@ else
   emit_event sync success "iPod sync complete — safe to unplug" "$(basename "$LOGFILE")"
 fi
 if [[ "$MODE" == "aquaria" ]]; then
-  python3 "$AQUARIA_SYNC" report --sig "$IPOD_SIG" --status ok \
-    --message "Synced" --stats "$(cat "$STAGE/plan.json")" || true
+  if (( SKIPPED )); then
+    python3 "$AQUARIA_SYNC" report --sig "$IPOD_SIG" --status warning \
+      --message "Synced, but $SKIPPED file(s) couldn't be copied (names the iPod can't store) — see $(basename "$LOGFILE")" \
+      --stats "$(cat "$STAGE/plan.json")" || true
+  else
+    python3 "$AQUARIA_SYNC" report --sig "$IPOD_SIG" --status ok \
+      --message "Synced" --stats "$(cat "$STAGE/plan.json")" || true
+  fi
 fi
 
 # Optional: desktop notification if running in a graphical session
