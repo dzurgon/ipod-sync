@@ -444,9 +444,8 @@ function renderFolder(body){
       "/library/"+enc([...PATH, name].join("/")));
   };
   const here = ARTDIRS[PATH.join("/")], gHere = depth===1 && GENREDIRS[PATH[0]];
-  const nMissing = Object.values(GENREDIRS).concat(Object.values(ARTDIRS)).filter(d=>!d.image).length;
   body.innerHTML = `<div class="crumb path">${crumbs}</div>
-    ${depth===0 ? fetchBar(nMissing, "artwork") : ""}
+    ${depth===0 ? fetchBar() : ""}
     ${here ? artistHeader([here], here.artist, `${countAlbums(node)} albums · ${genreLabel(PATH[0])}`) : ""}
     ${gHere ? artistHeader([gHere], gHere.genre, `${folders.length} folders · ${countAlbums(node)} albums`, true) : ""}
     <div class="grid">${folders.map(folderTile).join("")}${albums.map(a=>albumTile(a,
@@ -480,8 +479,7 @@ async function renderLibrary(){
     return;
   } else if(VIEW==="artist"){
     ARTISTS = items;
-    const nMissing = Object.values(GENREDIRS).concat(Object.values(ARTDIRS)).filter(d=>!d.image).length;
-    body.innerHTML = `${fetchBar(nMissing, "artwork")}
+    body.innerHTML = `${fetchBar()}
       <div class="grid">${items.map(a=>tile({
         name:a.artist, icon:'head', image:a.image ? imgUrl(a.image) : null,
         n_albums:a.n_albums}, "/artist/"+encodeURIComponent(a.artist))).join("")}</div>`;
@@ -497,9 +495,25 @@ async function renderLibrary(){
   }
 }
 
-const fetchBar = (n) => !ME ? "" : `<div class="bar" style="display:flex;gap:10px;align-items:center;margin-bottom:16px;flex-wrap:wrap">
-    <button class="btn" id="fetchMissing" ${n?'':'disabled'}>🔍 Fetch missing genre &amp; artist artwork (${n})</button>
-    <small class="sub" id="fetchStatus" style="margin:0"></small></div>`;
+// Genre + artist folders with no <Folder>/<Folder>.jpg yet, genres first.
+const missingArt = () => Object.values(GENREDIRS).concat(Object.values(ARTDIRS))
+  .filter(d=>!d.image).sort((a,b)=>a.rel_dir.localeCompare(b.rel_dir));
+const artPath = d => `${d.rel_dir}/${d.rel_dir.split("/").pop()}.jpg`;
+
+function fetchBar(){
+  if(!ME) return "";
+  const miss = missingArt();
+  return `<div class="bar" style="display:flex;gap:10px;align-items:center;margin-bottom:${miss.length?6:16}px;flex-wrap:wrap">
+    <button class="btn" id="fetchMissing" ${miss.length?'':'disabled'}>🔍 Fetch missing genre &amp; artist artwork (${miss.length})</button>
+    <small class="sub" id="fetchStatus" style="margin:0"></small></div>
+  ${miss.length ? `<details class="missing" style="margin-bottom:16px"><summary class="sub" style="cursor:pointer;margin:0">
+      Show the ${miss.length} missing file${miss.length===1?'':'s'}</summary>
+    <div class="list" id="missingList" style="margin-top:8px">${miss.map(d=>`
+      <a class="row click" data-link href="/library/${enc(d.rel_dir)}" data-rel="${esc(d.rel_dir)}">
+        <div class="main"><code>${esc(artPath(d))}</code></div>
+        <div class="r-genre nf" hidden>not found online</div>
+      </a>`).join("")}</div></details>` : ""}`;
+}
 function wireFetchBar(){
   if(!ME) return;
   $("#fetchMissing").onclick = async ()=>{ await post("/api/folder-art/fetch-missing"); pollFetch(); };
@@ -517,7 +531,10 @@ async function pollFetch(){
     setTimeout(pollFetch, 1500);
   } else if(j.total){
     st.textContent = `Last run: ${j.found} of ${j.total} found` +
-      (j.missing.length ? ` — nothing found for ${j.missing.length}; open those folders to upload one` : "");
+      (j.missing.length ? ` — nothing found online for ${j.missing.length}; upload those from their folders` : "");
+    const nf = new Set(j.missing);
+    document.querySelectorAll("#missingList [data-rel]").forEach(r=>
+      r.querySelector(".nf").hidden = !nf.has(r.dataset.rel));
     if(FETCHING){ FETCHING = false; IMGV = Date.now(); renderLibrary(); }
   }
 }
