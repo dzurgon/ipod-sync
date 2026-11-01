@@ -102,6 +102,16 @@ def test_artwork_is_revalidated_but_audio_is_not(client):
     assert "cache-control" not in client.get("/media/" + track).headers
 
 
+def test_audio_served_with_real_types(client, monkeypatch):
+    lib = Path(client.get("/healthz").json()["music_root"])
+    track = next(lib.rglob("*.flac")).relative_to(lib).as_posix()
+    r = client.get("/media/" + track, headers={"Range": "bytes=0-9"})
+    assert r.status_code == 206 and r.headers["content-type"] == "audio/flac"
+    import app.main as m
+    monkeypatch.setattr(m.shutil, "which", lambda _: None)
+    assert client.get("/stream/" + track).status_code == 501      # no ffmpeg → clear error
+
+
 def test_scan_summary_counts(client):
     r = client.post("/api/scan").json()
     assert r["added"] == 0 and r["pruned"] == 0 and r["tracks"] > 0

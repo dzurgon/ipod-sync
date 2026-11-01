@@ -143,6 +143,12 @@
   .player.on{display:flex}
   .player .now{min-width:0;flex:1;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;font-size:13px}
   .player audio{flex:2;min-width:180px;height:36px}
+  .pctl{display:flex;gap:4px}
+  .pbtn{background:none;border:1px solid transparent;border-radius:8px;color:var(--ink);font-size:16px;
+        padding:4px 7px;cursor:pointer;opacity:.75}
+  .pbtn:hover{opacity:1;border-color:var(--line)}
+  .pbtn[aria-pressed="true"]{opacity:1;border-color:var(--aqua);background:rgba(0,229,255,.12)}
+  @media (max-width:560px){ .player{flex-wrap:wrap;gap:6px} .player .now{flex-basis:100%} }
 
   /* Floating "currently adding" search */
   .fab{position:fixed;left:16px;bottom:22px;z-index:20;transition:bottom .2s}
@@ -216,6 +222,11 @@
 
 <div class="player" id="player">
   <div class="now" id="now"></div>
+  <div class="pctl">
+    <button class="pbtn" id="pPrev" title="Previous">⏮</button>
+    <button class="pbtn" id="pNext" title="Next">⏭</button>
+    <button class="pbtn" id="pShuf" title="Shuffle" aria-pressed="false">🔀</button>
+  </div>
   <audio id="audio" controls preload="none"></audio>
 </div>
 <div class="toast" id="toast"></div>
@@ -233,7 +244,10 @@ let PLAYLISTS = [];          // every playlist visible to the viewer
 let MINE = [];               // the viewer's own (editable) playlists
 let ME = null;               // {username, lastfm_user} when logged in
 let LASTFM_OK = false;       // server has Last.fm API credentials
-let QUEUE = [], QI = -1;     // play queue of {rel_path,title,artist}
+let QUEUE = [];              // play queue of {rel_path,title,artist}
+let ORDER = [], POS = -1;    // play order (indices into QUEUE; shuffled when SHUFFLE) + position
+let SHUFFLE = false;         // remembered per browser
+try { SHUFFLE = localStorage.getItem("aquaria.shuffle") === "1"; } catch(e){}
 
 async function api(path, opts){
   const r = await fetch(path, opts);
@@ -300,17 +314,76 @@ async function loadPlaylists(){
 }
 
 // ── Player ──────────────────────────────────────────────────────────────────
+// Browsers can't decode some lossless formats (AIFF in Chrome/Firefox, Apple Lossless .m4a):
+// those play through /stream/…, which the server converts to FLAC on the fly.
+const MIME = {flac:"audio/flac", mp3:"audio/mpeg", m4a:"audio/mp4", mp4:"audio/mp4", aac:"audio/aac",
+              ogg:"audio/ogg", opus:"audio/ogg", wav:"audio/wav", aiff:"audio/aiff", aif:"audio/aiff"};
+function srcFor(t, convert){
+  const ext = t.rel_path.split(".").pop().toLowerCase();
+  const canPlay = MIME[ext] && $("#audio").canPlayType(MIME[ext]);
+  return (convert || !canPlay ? "/stream/" : "/media/") + enc(t.rel_path);
+}
+
+function shuffled(arr){
+  const a = arr.slice();
+  for(let i = a.length - 1; i > 0; i--){ const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; }
+  return a;
+}
+// Rebuild the play order with QUEUE[first] at the current position.
+function setOrder(first){
+  const rest = QUEUE.map((_, k)=>k).filter(k=>k !== first);
+  ORDER = SHUFFLE ? [first, ...shuffled(rest)] : QUEUE.map((_, k)=>k);
+  POS = ORDER.indexOf(first);
+}
+
+// Play `tracks` starting at index i (with shuffle on, the rest follow in random order).
 function play(tracks, i){
-  QUEUE = tracks; QI = i;
-  const t = QUEUE[QI]; if(!t) return;
+  QUEUE = tracks;
+  if(!QUEUE[i]) return;
+  setOrder(i);
+  playAt(POS);
+}
+// Play with shuffle on from a random track — the "🔀 Shuffle" buttons.
+function shufflePlay(tracks){
+  if(!tracks.length) return;
+  setShuffle(true);
+  play(tracks, Math.floor(Math.random() * tracks.length));
+}
+
+function playAt(pos, convert=false){
+  POS = pos;
+  const t = QUEUE[ORDER[POS]]; if(!t) return;
   const a = $("#audio");
-  a.src = "/media/" + enc(t.rel_path); a.play();
+  a.src = srcFor(t, convert);
+  a.play().catch(()=>{});                       // failures arrive as the "error" event
   $("#now").innerHTML = `▶ <b>${esc(t.title)}</b> <small>· ${esc(t.artist||"")}</small>`;
   $("#player").classList.add("on"); document.body.classList.add("playing");
   document.querySelectorAll(".row.playing").forEach(r=>r.classList.remove("playing"));
   document.querySelectorAll(`.row[data-rel="${CSS.escape(t.rel_path)}"]`).forEach(r=>r.classList.add("playing"));
 }
-$("#audio").onended = () => { if(QI+1 < QUEUE.length) play(QUEUE, QI+1); };
+const next = () => { if(POS + 1 < ORDER.length) playAt(POS + 1); };
+function prev(){
+  const a = $("#audio");
+  if(a.currentTime > 3 || POS <= 0) a.currentTime = 0; else playAt(POS - 1);
+}
+function setShuffle(on){
+  SHUFFLE = on;
+  try { localStorage.setItem("aquaria.shuffle", on ? "1" : "0"); } catch(e){}
+  $("#pShuf").setAttribute("aria-pressed", String(on));
+  if(QUEUE.length && POS >= 0) setOrder(ORDER[POS]);   // keep the current track playing
+}
+
+$("#audio").onended = next;
+$("#audio").onerror = () => {
+  const t = QUEUE[ORDER[POS]]; if(!t) return;
+  if(!$("#audio").src.includes("/stream/")) return playAt(POS, true);   // retry converted
+  toast(`Can't play “${t.title}” — skipping`);
+  if(POS + 1 < ORDER.length) setTimeout(next, 800);
+};
+$("#pNext").onclick = next;
+$("#pPrev").onclick = prev;
+$("#pShuf").onclick = () => setShuffle(!SHUFFLE);
+$("#pShuf").setAttribute("aria-pressed", String(SHUFFLE));
 
 // ── Add-to-playlist popover ─────────────────────────────────────────────────
 function closePop(){ document.querySelectorAll(".pop").forEach(p=>p.remove()); }
@@ -587,6 +660,7 @@ async function renderAlbum(folder){
         <div class="sub" style="margin:0">${esc(al.artist)}${al.genre?' · '+esc(al.genre):''} · ${tracks.length} tracks</div>
         <div class="bar">
           <button class="btn primary" id="playAll">▶ Play</button>
+          <button class="btn" id="shufAll">🔀 Shuffle</button>
           <a class="btn" href="/download/album?folder=${encodeURIComponent(folder)}">⬇ Download album (.zip)</a>
           <button class="btn" data-add id="addAll">＋ Add to playlist</button>
           ${ME ? `<label class="btn" title="Saved as cover.jpg in the album folder">⬆ Upload cover<input type="file" id="coverUpload" accept="image/jpeg,image/png,image/webp" hidden></label>` : ""}
@@ -605,6 +679,7 @@ async function renderAlbum(folder){
       </div>`).join("")}</div>`;
   setTitle(`${al.album} — ${al.artist}`);
   $("#playAll").onclick = ()=>play(tracks, 0);
+  $("#shufAll").onclick = ()=>shufflePlay(tracks);
   $("#addAll").onclick = e=>{ e.stopPropagation(); showAddPop(e.currentTarget, {folder}); };
   if(ME) $("#coverUpload").onchange = async e=>{
     const f = e.target.files[0]; if(!f) return;
@@ -674,6 +749,7 @@ async function renderPlaylist(pid){
         <div class="sub" style="margin:0">${pl.items.length} tracks · by <a data-link href="/user/${encodeURIComponent(pl.owner)}">${esc(pl.owner)}</a></div>
         <div class="bar">
           <button class="btn primary" id="playAll" ${playable.length?'':'disabled'}>▶ Play</button>
+          <button class="btn" id="shufAll" ${playable.length?'':'disabled'}>🔀 Shuffle</button>
           <a class="btn" href="/download/playlist/${pid}">⬇ Download (.zip)</a>
           ${mine ? `<button class="btn" id="edit">${editing?'✓ Adding from search':'✏️ Add songs via search'}</button>
           <button class="btn" id="vis">${pl.is_public ? '🔒 Make private' : '🌐 Make public'}</button>
@@ -697,6 +773,7 @@ async function renderPlaylist(pid){
       </div>`).join("")}</div>`
     : `<div class="empty">Empty${mine ? " — click “Add songs via search”, or use ＋ on any album." : "."}</div>`}`;
   $("#playAll").onclick = ()=>play(playable, 0);
+  $("#shufAll").onclick = ()=>shufflePlay(playable);
   document.querySelectorAll("[data-play]").forEach(b=>b.onclick=()=>
     play(playable, playable.findIndex(t=>t.rel_path===b.dataset.play)));
   if(!mine) return;

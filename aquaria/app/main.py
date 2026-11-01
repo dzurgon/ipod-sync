@@ -9,6 +9,8 @@ sync API (ipods.py). Guests can read; writes need a logged-in user.
 
 from __future__ import annotations
 
+import shutil
+import subprocess
 import threading
 import urllib.parse
 import zipfile
@@ -117,10 +119,40 @@ def _image(request: Request, f: Path) -> Response:
     return FileResponse(f, headers=headers)
 
 
+# Real audio types: browsers decide what <audio> can play from these, and some refuse
+# application/octet-stream outright.
+AUDIO_TYPES = {".flac": "audio/flac", ".mp3": "audio/mpeg", ".m4a": "audio/mp4", ".mp4": "audio/mp4",
+               ".aac": "audio/aac", ".ogg": "audio/ogg", ".opus": "audio/ogg", ".wav": "audio/wav",
+               ".aiff": "audio/aiff", ".aif": "audio/aiff", ".wma": "audio/x-ms-wma"}
+
+
 @app.get("/media/{rel_path:path}")
 def media(rel_path: str, request: Request):
     f = _music_file(rel_path)
-    return _image(request, f) if f.suffix.lower() in IMAGE_EXTS else FileResponse(f)
+    if f.suffix.lower() in IMAGE_EXTS:
+        return _image(request, f)
+    return FileResponse(f, media_type=AUDIO_TYPES.get(f.suffix.lower()))
+
+
+@app.get("/stream/{rel_path:path}")
+def stream(rel_path: str):
+    """The track converted to FLAC on the fly — for formats the browser can't decode
+    (AIFF in Chrome/Firefox, Apple Lossless .m4a). Lossless; no seeking ahead."""
+    f = _music_file(rel_path)
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        raise HTTPException(501, "ffmpeg isn't installed on the server")
+    proc = subprocess.Popen([ffmpeg, "-v", "error", "-i", str(f), "-map", "0:a:0", "-c:a", "flac",
+                             "-f", "flac", "pipe:1"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+
+    def chunks():
+        try:
+            while data := proc.stdout.read(64 * 1024):
+                yield data
+        finally:                                   # client left or track ended
+            proc.kill()
+            proc.wait()
+    return StreamingResponse(chunks(), media_type="audio/flac")
 
 
 @app.get("/art/{folder:path}")
