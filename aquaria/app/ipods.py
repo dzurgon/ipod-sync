@@ -34,7 +34,7 @@ from typing import Literal
 from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel
 
-from . import config, playlists, state
+from . import config, indexer, playlists, state
 from .accounts import require_user
 from .parser import parse_genre
 
@@ -367,6 +367,10 @@ def host_plan(sig: str):
     ip = _linked(sig)
     if not ip:
         raise HTTPException(404, "iPod not linked")
+    # Rescan first: the plan is built from the index, and anything added to the library
+    # since the last scan would be left off the iPod — or deleted from it.
+    with state.write_lock:
+        indexer.scan(state.conn, config.MUSIC_ROOT)
     return build_plan(ip, ip["user_id"])
 
 

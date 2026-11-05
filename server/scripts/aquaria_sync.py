@@ -8,8 +8,8 @@ Deploy to: /usr/local/lib/ipod-sync/aquaria_sync.py   (stdlib only)
 Reads AQUARIA_URL (default http://127.0.0.1:8337) and AQUARIA_HOST_TOKEN from the
 environment (ipod-sync.sh sources /etc/ipod-sync/aquaria.env). Subcommands:
 
-  identify  --mount M [--devname D]   print the iPod's signature: USB serial, else the
-                                      .aquaria/id marker on the iPod, else FS UUID, else
+  identify  --mount M [--devname D]   print the iPod's signature: the .aquaria/id marker
+                                      on the iPod, else USB serial, else FS UUID, else
                                       a new marker. Writes metadata to M/.aquaria/host.json
   seen      --mount M --sig S         register with Aquaria. exit 0 linked · 10 not linked
                                       · 20 Aquaria unreachable / host API disabled
@@ -104,10 +104,12 @@ def cmd_identify(a) -> int:
     props = udev_props(dev) if dev else {}
     state = mount / STATE_DIR
     marker = state / "id"
-    if props.get("ID_SERIAL_SHORT"):
-        sig = props["ID_SERIAL_SHORT"]
-    elif marker.is_file() and marker.read_text().strip():
+    # The marker wins: the USB serial the kernel reports for the same iPod can change
+    # between plugs (e.g. 300000000000A2700149D8299 vs 000A2700149D8299).
+    if marker.is_file() and marker.read_text().strip():
         sig = marker.read_text().strip()
+    elif props.get("ID_SERIAL_SHORT"):
+        sig = props["ID_SERIAL_SHORT"]
     elif props.get("ID_FS_UUID"):
         sig = "fs-" + props["ID_FS_UUID"]
     else:

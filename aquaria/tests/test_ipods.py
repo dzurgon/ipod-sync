@@ -1,6 +1,7 @@
 """iPod linking, sync profiles, plans and the host API."""
 
 import json
+import shutil
 
 H = {"X-Aquaria-Token": "host-secret"}
 SIG = "000A27001A2B3C4D"
@@ -46,6 +47,15 @@ def test_plan_all_genre_layout(client):
     legacy = next(p for p in plan["playlists"] if p["name"] == "Legacy")
     assert legacy["m3u"] == "#EXTM3U\n/FLAC/0_ELECTRONIC/yeule/softscars (2023)/02. sulky baby.flac\n"
     assert plan["scrobble"] == {"enabled": False, "lastfm_user": None, "session_key": None}
+
+
+def test_plan_includes_albums_added_since_last_scan(client, tmp_path):
+    seen(client); link(client)
+    shutil.copytree(tmp_path / "lib/0_POP/Charli XCX/BRAT (2025)", tmp_path / "lib/0_WORLD/Boukan Ginen/Jou A Rive")
+    shutil.rmtree(tmp_path / "lib/0_POP/Passion Pit - Gossamer (2013)")
+    src = {m["src"] for m in client.get(f"/api/host/ipods/{SIG}/plan", headers=H).json()["music"]}
+    assert "0_WORLD/Boukan Ginen/Jou A Rive" in src
+    assert "0_POP/Passion Pit - Gossamer (2013)" not in src
 
 
 def test_plan_selected_flat_and_scrobble(client, other):
