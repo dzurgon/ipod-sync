@@ -85,3 +85,26 @@ def test_lastfm_callback_stores_session(client, monkeypatch):
     assert client.get("/api/users/jimin").json()["lastfm_user"] == "jimin_fm"
     client.delete("/api/me/lastfm")
     assert client.get("/api/users/jimin").json()["lastfm_user"] is None
+
+
+def test_web_player_scrobbles(client, monkeypatch):
+    from app import accounts
+    calls = []
+    monkeypatch.setattr(accounts, "lastfm_post", lambda m, p, sk: calls.append((m, p, sk)) or {})
+    rel = client.get("/api/search?q=sulky").json()["tracks"][0]["rel_path"]
+    assert client.post("/api/me/scrobble", json={"rel_path": rel}).json()["reason"] == "not connected"
+
+    monkeypatch.setattr(accounts, "lastfm_get_session", lambda token: ("jimin_fm", "sk-abc"))
+    client.get("/lastfm/callback?token=abc", follow_redirects=False)
+    assert client.post("/api/me/nowplaying", json={"rel_path": rel}).json() == {"ok": True}
+    assert client.post("/api/me/scrobble", json={"rel_path": rel, "started": 1700000000,
+                                                 "duration": 201.4}).json() == {"ok": True}
+    (m1, p1, sk), (m2, p2, _) = calls
+    assert (m1, m2, sk) == ("track.updateNowPlaying", "track.scrobble", "sk-abc")
+    assert p2["artist"] == "yeule" and p2["track"] == "sulky baby" and p2["timestamp"] == 1700000000
+    assert p2["duration"] == 201 and "timestamp" not in p1
+    assert client.post("/api/me/scrobble", json={"rel_path": "nope.flac"}).status_code == 404
+
+    monkeypatch.setattr(accounts, "lastfm_post", lambda *a: (_ for _ in ()).throw(RuntimeError("Invalid session key")))
+    r = client.post("/api/me/scrobble", json={"rel_path": rel})
+    assert r.status_code == 502 and "Invalid session key" in r.json()["detail"]

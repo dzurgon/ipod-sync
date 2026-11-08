@@ -8,6 +8,7 @@ Accounts: username + password login, cookie sessions, public profiles, Last.fm.
 * Guests may read (library, public playlists, profiles); anything that writes
   depends on `require_user`.
 * Last.fm uses the web-auth flow, so each user links their own scrobbling account.
+  The web player scrobbles through it too (iPod plays go via the host's scrobble.py).
 """
 
 from __future__ import annotations
@@ -18,6 +19,7 @@ import json
 import re
 import secrets
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 
@@ -228,6 +230,61 @@ def lastfm_callback(token: str = "", user: dict | None = Depends(current_user)):
                            (name, key, user["id"]))
         state.conn.commit()
     return RedirectResponse(f"/user/{urllib.parse.quote(user['username'])}")
+
+
+def lastfm_post(method: str, params: dict, session_key: str) -> dict:
+    """Signed write call (track.scrobble, track.updateNowPlaying)."""
+    params = {k: str(v) for k, v in params.items() if v not in (None, "")}
+    params |= {"method": method, "api_key": config.LASTFM_API_KEY, "sk": session_key}
+    params["api_sig"] = _lastfm_sig(params)
+    req = urllib.request.Request(LASTFM_API, urllib.parse.urlencode(params | {"format": "json"}).encode())
+    try:
+        with urllib.request.urlopen(req, timeout=15) as r:
+            return json.loads(r.read())
+    except urllib.error.HTTPError as e:
+        try:
+            msg = json.loads(e.read()).get("message") or str(e)
+        except ValueError:
+            msg = str(e)
+        raise RuntimeError(msg) from None
+
+
+class Play(BaseModel):
+    rel_path: str
+    started: int | None = None        # unix time playback began (scrobbles only)
+    duration: float | None = None     # seconds, when the browser knows it
+
+
+def _web_play(user: dict, body: Play, method: str) -> dict:
+    row = state.conn.execute("SELECT lastfm_session FROM users WHERE id=?", (user["id"],)).fetchone()
+    if not row or not row["lastfm_session"]:
+        return {"ok": False, "reason": "not connected"}
+    t = state.conn.execute("SELECT artist, album, title, track_no FROM tracks WHERE rel_path=?",
+                           (body.rel_path,)).fetchone()
+    if not t:
+        raise HTTPException(404, "track not in library")
+    if not t["artist"]:
+        return {"ok": False, "reason": "no artist"}
+    params = {"artist": t["artist"], "track": t["title"], "album": t["album"],
+              "trackNumber": t["track_no"],
+              "duration": round(body.duration) if body.duration and body.duration < 1e6 else None}
+    if method == "track.scrobble":
+        params["timestamp"] = body.started or int(time.time())
+    try:
+        lastfm_post(method, params, row["lastfm_session"])
+    except Exception as e:
+        raise HTTPException(502, f"Last.fm: {e}")
+    return {"ok": True}
+
+
+@router.post("/api/me/nowplaying")
+def web_now_playing(body: Play, user: dict = Depends(require_user)):
+    return _web_play(user, body, "track.updateNowPlaying")
+
+
+@router.post("/api/me/scrobble")
+def web_scrobble(body: Play, user: dict = Depends(require_user)):
+    return _web_play(user, body, "track.scrobble")
 
 
 @router.delete("/api/me/lastfm")

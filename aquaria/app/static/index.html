@@ -442,6 +442,7 @@ function playAt(pos, convert=false){
   POS = pos;
   const t = QUEUE[ORDER[POS]]; if(!t) return;
   const a = $("#audio");
+  if(!convert) scrobbleStart(t);                // a converted retry is the same play
   a.src = srcFor(t, convert);
   a.play().catch(()=>{});                       // failures arrive as the "error" event
   $("#now").innerHTML = `▶ <b>${esc(t.title)}</b> <small>· ${esc(t.artist||"")}</small>`;
@@ -461,7 +462,33 @@ function setShuffle(on){
   if(QUEUE.length && POS >= 0) setOrder(ORDER[POS]);   // keep the current track playing
 }
 
-$("#audio").onended = next;
+// Last.fm for web plays: "now playing" when a track starts, then a scrobble once it has
+// been heard for half its length or 4 minutes (Last.fm's rule). Only time actually played
+// counts — seeking ahead doesn't. Needs Last.fm connected on your profile.
+let PLAY = null;             // {t, started, heard, last, done} for the current track
+function scrobbleStart(t){
+  PLAY = {t, started: Math.floor(Date.now() / 1000), heard: 0, last: null, done: false};
+  if(ME?.lastfm_user) post("/api/me/nowplaying", {rel_path: t.rel_path}).catch(()=>{});
+}
+function scrobbleCheck(ended=false){
+  if(!PLAY || PLAY.done || !ME?.lastfm_user) return;
+  const a = $("#audio"), d = isFinite(a.duration) ? a.duration : null;   // converted streams: unknown
+  if(d !== null && d < 30) return;                                       // too short to scrobble
+  if(PLAY.heard >= 240 || (d && PLAY.heard >= d / 2) || (ended && PLAY.heard >= 30)){
+    PLAY.done = true;
+    post("/api/me/scrobble", {rel_path: PLAY.t.rel_path, started: PLAY.started, duration: d})
+      .catch(e => toast(`Last.fm scrobble failed — ${e.message}`));
+  }
+}
+$("#audio").addEventListener("timeupdate", () => {
+  const a = $("#audio"); if(!PLAY) return;
+  const dt = a.currentTime - (PLAY.last ?? a.currentTime);
+  if(!a.paused && dt > 0 && dt < 2) PLAY.heard += dt;
+  PLAY.last = a.currentTime;
+  scrobbleCheck();
+});
+$("#audio").addEventListener("seeking", () => { if(PLAY) PLAY.last = null; });
+$("#audio").onended = () => { scrobbleCheck(true); next(); };
 $("#audio").onerror = () => {
   const t = QUEUE[ORDER[POS]]; if(!t) return;
   if(!$("#audio").src.includes("/stream/")) return playAt(POS, true);   // retry converted
