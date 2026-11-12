@@ -32,6 +32,7 @@ import time
 from typing import Literal
 
 from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from . import config, indexer, playlists, state
@@ -153,7 +154,7 @@ def build_plan(ipod: dict, owner_id: int) -> dict:
         seen.add(name.lower())
         lines = [f"/{IPOD_MUSIC_DIR}/{project(i['rel_path'], layout)}"
                  for i in p["items"] if i["rel_path"]]
-        out_pls.append({"id": p["id"], "name": name, "owner": p["owner"],
+        out_pls.append({"id": p["id"], "name": name, "owner": p["owner"], "cover": bool(p["cover"]),
                         "m3u": "#EXTM3U\n" + "".join(l + "\n" for l in lines),
                         "n_tracks": len(lines)})
 
@@ -397,6 +398,15 @@ def host_plan(sig: str):
     with state.write_lock:
         indexer.scan(state.conn, config.MUSIC_ROOT)
     return build_plan(ip, ip["user_id"])
+
+
+@router.get("/api/host/ipods/{sig}/playlists/{playlist_id}/cover", dependencies=[Depends(require_host)])
+def host_playlist_cover(sig: str, playlist_id: int):
+    ip = _linked(sig)
+    f = config.COVERS_DIR / f"{playlist_id}.jpg"
+    if not ip or playlist_id not in pushed_playlist_ids(ip, ip["user_id"]) or not f.is_file():
+        raise HTTPException(404, "no cover")
+    return FileResponse(f, media_type="image/jpeg")
 
 
 @router.post("/api/host/ipods/{sig}/report", dependencies=[Depends(require_host)])

@@ -113,6 +113,22 @@ COVER_NAMES = ("cover.jpg", "cover.jpeg", "cover.png", "cover.webp")
 COVER_MAX_PX = 1000
 
 
+def to_jpeg(data: bytes) -> bytes:
+    """Any JPEG/PNG/WebP -> a baseline JPEG <= COVER_MAX_PX, which Rockbox can also show."""
+    if len(data) > MAX_BYTES:
+        raise ValueError("image is larger than 15 MB")
+    if not sniff_ext(data):
+        raise ValueError("not a JPEG, PNG or WebP image")
+    try:
+        img = Image.open(io.BytesIO(data))
+        img.thumbnail((COVER_MAX_PX, COVER_MAX_PX))
+        out = io.BytesIO()
+        img.convert("RGB").save(out, "JPEG", quality=90, progressive=False)
+    except Exception as e:
+        raise ValueError(f"could not read image: {e}")
+    return out.getvalue()
+
+
 def save_cover(music_root: Path, rel_dir: str, data: bytes) -> str:
     """Write <album>/cover.jpg as a baseline JPEG (<= 1000px), replacing any other cover.*."""
     if len(data) > MAX_BYTES:
@@ -123,18 +139,12 @@ def save_cover(music_root: Path, rel_dir: str, data: bytes) -> str:
     folder = (root / rel_dir).resolve()
     if root not in folder.parents or not folder.is_dir():
         raise FileNotFoundError(rel_dir)
-    try:
-        img = Image.open(io.BytesIO(data))
-        img.thumbnail((COVER_MAX_PX, COVER_MAX_PX))
-        out = io.BytesIO()
-        img.convert("RGB").save(out, "JPEG", quality=90, progressive=False)
-    except Exception as e:
-        raise ValueError(f"could not read image: {e}")
+    jpeg = to_jpeg(data)
     for old in folder.iterdir():
         if old.name.lower() in COVER_NAMES:
             old.unlink()
     tmp = folder / ".cover.jpg.tmp"
-    tmp.write_bytes(out.getvalue())
+    tmp.write_bytes(jpeg)
     tmp.replace(folder / "cover.jpg")
     return (folder / "cover.jpg").relative_to(root).as_posix()
 

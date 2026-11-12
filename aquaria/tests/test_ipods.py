@@ -157,3 +157,30 @@ def test_same_ipod_under_another_serial_is_not_a_new_device(client):
     # A different iPod (other disk, unrelated serial) is still new.
     client.post("/api/host/ipods/000A2700FFFF0000/seen", headers=H, json=meta("000A2700FFFF0000", "1234-ABCD"))
     assert [u["signature"] for u in client.get("/api/ipods").json()["unclaimed"]] == ["000A2700FFFF0000"]
+
+
+def test_playlist_cover_shows_in_app_and_travels_to_the_ipod(client, other):
+    import io
+    from PIL import Image
+    png = io.BytesIO(); Image.new("RGB", (1600, 1200), "teal").save(png, "PNG")
+    seen(client); link(client)
+    pid = client.post("/api/playlists", json={"name": "Night Drive", "is_public": False}).json()["id"]
+
+    assert client.post(f"/api/playlists/{pid}/cover", files={"file": ("x.txt", b"nope")}).status_code == 400
+    pl = client.post(f"/api/playlists/{pid}/cover", files={"file": ("c.png", png.getvalue())}).json()
+    assert pl["cover"]
+    jpg = client.get(f"/playlist-cover/{pid}")
+    assert jpg.headers["content-type"] == "image/jpeg"
+    img = Image.open(io.BytesIO(jpg.content))
+    assert img.format == "JPEG" and max(img.size) <= 1000 and not img.info.get("progressive")
+    assert other.get(f"/playlist-cover/{pid}").status_code == 404         # private playlist
+    assert other.post(f"/api/playlists/{pid}/cover", files={"file": ("c.png", png.getvalue())}).status_code == 401
+
+    entry = next(p for p in client.get(f"/api/host/ipods/{SIG}/plan", headers=H).json()["playlists"]
+                 if p["id"] == pid)
+    assert entry["cover"] is True
+    assert client.get(f"/api/host/ipods/{SIG}/playlists/{pid}/cover", headers=H).content == jpg.content
+
+    assert client.delete(f"/api/playlists/{pid}/cover").json()["cover"] is None
+    assert client.get(f"/playlist-cover/{pid}").status_code == 404
+    assert client.get(f"/api/host/ipods/{SIG}/playlists/{pid}/cover", headers=H).status_code == 404

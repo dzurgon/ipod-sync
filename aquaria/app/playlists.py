@@ -200,7 +200,7 @@ def sync_dir(conn, playlist_dir: Path, owner_id: int) -> dict:
 def list_playlists(conn, viewer_id: int | None = None) -> list[dict]:
     """Public playlists plus the viewer's own private ones."""
     rows = conn.execute("""
-        SELECT p.id, p.name, p.updated_at, u.username AS owner, p.user_id = ? AS is_mine,
+        SELECT p.id, p.name, p.updated_at, p.cover, u.username AS owner, p.user_id = ? AS is_mine,
                p.is_global AS is_public,
                COUNT(i.id) AS n_tracks,
                SUM(CASE WHEN i.id IS NOT NULL AND i.track_id IS NULL THEN 1 ELSE 0 END) AS n_missing
@@ -217,7 +217,7 @@ def list_playlists(conn, viewer_id: int | None = None) -> list[dict]:
 def get_playlist(conn, playlist_id: int, viewer_id: int | None = None) -> dict | None:
     """The playlist with its items, or None if it doesn't exist or is private to someone else."""
     pl = conn.execute(
-        "SELECT p.id, p.name, p.updated_at, p.user_id, p.is_global, u.username AS owner "
+        "SELECT p.id, p.name, p.updated_at, p.cover, p.user_id, p.is_global, u.username AS owner "
         "FROM playlists p JOIN users u ON u.id = p.user_id WHERE p.id=?",
         (playlist_id,)).fetchone()
     if not pl or (not pl["is_global"] and pl["user_id"] != viewer_id):

@@ -15,7 +15,8 @@ environment (ipod-sync.sh sources /etc/ipod-sync/aquaria.env). Subcommands:
                                       · 20 Aquaria unreachable / host API disabled
   pull      --mount M --sig S         import playlists created on the iPod (.m3u/.m3u8, not ones
                                       we pushed); each original is kept as <name>.imported
-  prune     --mount M --pushed FILE   delete playlists we pushed before that left the plan
+  prune     --mount M --pushed FILE   delete playlists we pushed before that left the plan,
+                                      and covers (<name>.jpg) we no longer push
                                       (never touches playlists made on the iPod)
   stage     --mount M --sig S --music-root R --out DIR
             builds DIR/music      symlink tree: <iPod path> -> <server file/folder>
@@ -64,6 +65,20 @@ def api(method: str, path: str, body: dict | None = None, ok404: bool = False):
         raise Unreachable(f"{method} {path}: HTTP {e.code} {e.read()[:200]!r}")
     except (urllib.error.URLError, OSError) as e:
         raise Unreachable(f"{method} {path}: {e}")
+
+
+def fetch(path: str) -> bytes | None:
+    """Raw GET (images); None on 404."""
+    req = urllib.request.Request(URL + path, headers={"X-Aquaria-Token": TOKEN})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            return r.read()
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            return None
+        raise Unreachable(f"GET {path}: HTTP {e.code}")
+    except (urllib.error.URLError, OSError) as e:
+        raise Unreachable(f"GET {path}: {e}")
 
 
 def sig_path(sig: str) -> str:
@@ -199,6 +214,12 @@ def cmd_prune(a) -> int:
         if f.is_file():
             f.unlink()
             print(f"  removed playlist no longer synced to this iPod: {f.name}")
+    # Covers travel as <name>.jpg next to the .m3u: drop ours whose cover was removed too.
+    staged = Path(a.pushed).parent / "playlists"
+    for name in sorted(before | now):
+        jpg = _safe_name(name) + ".jpg"
+        if not (staged / jpg).is_file() and (pdir / jpg).is_file():
+            (pdir / jpg).unlink()
     return 0
 
 
@@ -237,6 +258,9 @@ def cmd_stage(a) -> int:
         fname = _safe_name(p["name"]) + ".m3u"
         (plsdir / fname).write_text(p["m3u"], encoding="utf-8")
         names.append(Path(fname).stem)
+        cover = p.get("cover") and fetch(f"{sig_path(a.sig)}/playlists/{p['id']}/cover")
+        if cover:                                  # Rockbox opens it in its image viewer
+            (plsdir / (Path(fname).stem + ".jpg")).write_bytes(cover)
     (out / "pushed.json").write_text(json.dumps(names))
     (out / "plan.json").write_text(json.dumps(plan["summary"]))
 

@@ -369,7 +369,47 @@ def delete_playlist(playlist_id: int, user: dict = Depends(require_user)):
     _own_playlist(playlist_id, user)
     with write_lock:
         playlists.delete_playlist(conn, playlist_id)
+        (config.COVERS_DIR / f"{playlist_id}.jpg").unlink(missing_ok=True)
     return {"ok": True}
+
+
+# ── Playlist covers (<COVERS_DIR>/<id>.jpg; synced to iPods next to the .m3u) ──
+
+@app.post("/api/playlists/{playlist_id}/cover")
+async def set_playlist_cover(playlist_id: int, file: UploadFile = File(...),
+                             user: dict = Depends(require_user)):
+    _own_playlist(playlist_id, user)
+    try:
+        jpeg = folder_art.to_jpeg(await file.read(folder_art.MAX_BYTES + 1))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    config.COVERS_DIR.mkdir(parents=True, exist_ok=True)
+    f = config.COVERS_DIR / f"{playlist_id}.jpg"
+    with write_lock:
+        tmp = f.with_suffix(".tmp")
+        tmp.write_bytes(jpeg)
+        tmp.replace(f)
+        conn.execute("UPDATE playlists SET cover=? WHERE id=?", (f.stat().st_mtime, playlist_id))
+        conn.commit()
+    return playlists.get_playlist(conn, playlist_id, user["id"])
+
+
+@app.delete("/api/playlists/{playlist_id}/cover")
+def remove_playlist_cover(playlist_id: int, user: dict = Depends(require_user)):
+    _own_playlist(playlist_id, user)
+    with write_lock:
+        (config.COVERS_DIR / f"{playlist_id}.jpg").unlink(missing_ok=True)
+        conn.execute("UPDATE playlists SET cover=NULL WHERE id=?", (playlist_id,))
+        conn.commit()
+    return playlists.get_playlist(conn, playlist_id, user["id"])
+
+
+@app.get("/playlist-cover/{playlist_id}")
+def playlist_cover(playlist_id: int, request: Request, user: dict | None = Depends(current_user)):
+    f = config.COVERS_DIR / f"{playlist_id}.jpg"
+    if not playlists.get_playlist(conn, playlist_id, _viewer_id(user)) or not f.is_file():
+        raise HTTPException(404, "no cover")
+    return _image(request, f)
 
 
 # ── Folder artwork (genre buckets + artist folders) ──────────────────────────

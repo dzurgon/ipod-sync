@@ -169,6 +169,9 @@ DAY_MQ.addEventListener("change", () => applyTheme());
   .row small{color:var(--ink-dim)}
   .row.playing{background:rgba(111,242,228,.16)}
   .row.missing{opacity:.5}
+  .pl-thumb{width:34px;height:34px;border-radius:7px;flex-shrink:0;background:var(--thumb-bg);border:1px solid var(--line);
+            display:inline-flex;align-items:center;justify-content:center;font-size:16px;overflow:hidden;vertical-align:middle;margin-right:8px}
+  .pl-thumb img{width:100%;height:100%;object-fit:cover}
   .acts{display:flex;gap:4px;flex-shrink:0}
 
   .btn{border:1px solid var(--line);background:var(--glass);color:var(--ink);border-radius:10px;
@@ -811,9 +814,12 @@ async function renderAlbum(folder){
 
 // ── Playlists ───────────────────────────────────────────────────────────────
 const lock = p => p.is_public ? "" : ` <span class="pill" title="Only you can see this">🔒 private</span>`;
+// A playlist's cover (or the 🎶 placeholder); `cover` is its mtime, so a new one isn't cached.
+const plCover = (p, cls="pl-thumb") => `<span class="${cls}">${p.cover
+  ? `<img src="/playlist-cover/${p.id}?v=${p.cover}" alt="" loading="lazy">` : "🎶"}</span>`;
 const plRow = p => `
       <div class="row">
-        <a class="main" data-link href="/playlist/${p.id}">🎶 ${esc(p.name)}${lock(p)} <small>· ${p.n_tracks} tracks${p.n_missing?` · ${p.n_missing} unmatched`:''}${p.is_mine?'':` · by ${esc(p.owner)}`}</small></a>
+        <a class="main" data-link href="/playlist/${p.id}">${plCover(p)}${esc(p.name)}${lock(p)} <small>· ${p.n_tracks} tracks${p.n_missing?` · ${p.n_missing} unmatched`:''}${p.is_mine?'':` · by ${esc(p.owner)}`}</small></a>
         <div class="acts"><a class="btn icon" href="/download/playlist/${p.id}" title="Download (.zip)">⬇</a></div>
       </div>`;
 
@@ -859,14 +865,17 @@ async function renderPlaylist(pid){
   const mine = pl.is_mine, editing = EDITING===pid;
   $("#panel").innerHTML = `${backLink("/playlists", "Playlists")}
     <div class="head" style="align-items:center">
+      ${plCover(pl, "thumb")}
       <div class="info">
-        <h2>🎶 ${esc(pl.name)}${lock(pl)}</h2>
+        <h2>${esc(pl.name)}${lock(pl)}</h2>
         <div class="sub" style="margin:0">${pl.items.length} tracks · by <a data-link href="/user/${encodeURIComponent(pl.owner)}">${esc(pl.owner)}</a></div>
         <div class="bar">
           <button class="btn primary" id="playAll" ${playable.length?'':'disabled'}>▶ Play</button>
           <button class="btn" id="shufAll" ${playable.length?'':'disabled'}>🔀 Shuffle</button>
           <a class="btn" href="/download/playlist/${pid}">⬇ Download (.zip)</a>
           ${mine ? `<button class="btn" id="edit">${editing?'✓ Adding from search':'✏️ Add songs via search'}</button>
+          <label class="btn" title="Also copied to the iPod as “${esc(pl.name)}.jpg” next to the playlist">🖼 ${pl.cover ? "Change cover" : "Add cover"}<input type="file" id="plCover" accept="image/jpeg,image/png,image/webp" hidden></label>
+          ${pl.cover ? `<button class="btn" id="plCoverRm">Remove cover</button>` : ""}
           <button class="btn" id="vis">${pl.is_public ? '🔒 Make private' : '🌐 Make public'}</button>
           <button class="btn danger" id="del">🗑 Delete</button>` : ""}
         </div>
@@ -894,6 +903,14 @@ async function renderPlaylist(pid){
   if(!mine) return;
   $("#edit").onclick = ()=>{ EDITING = editing ? null : pid; loadPlaylists();
     if(!editing){ $("#fab").classList.add("open"); $("#q").focus(); } renderPlaylist(pid); };
+  $("#plCover").onchange = async e=>{
+    const f = e.target.files[0]; if(!f) return;
+    const fd = new FormData(); fd.append("file", f);
+    try { await api(`/api/playlists/${pid}/cover`, {method:"POST", body:fd}); toast("Cover saved"); renderPlaylist(pid); }
+    catch(err){ toast(err.message); }
+  };
+  if(pl.cover) $("#plCoverRm").onclick = async ()=>{
+    await post(`/api/playlists/${pid}/cover`, null, "DELETE"); toast("Cover removed"); renderPlaylist(pid); };
   $("#vis").onclick = async ()=>{
     await api(`/api/playlists/${pid}`, {method:"PATCH", headers:{"Content-Type":"application/json"},
       body: JSON.stringify({is_public: !pl.is_public})});

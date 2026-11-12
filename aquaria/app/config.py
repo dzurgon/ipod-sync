@@ -13,6 +13,8 @@ PORT = int(os.environ.get("AQUARIA_PORT", "8337"))
 # Tracks converted for the browser (ALAC, AIFF) are cached here, oldest evicted past the cap.
 CACHE_DIR = Path(os.environ.get("AQUARIA_CACHE", DB_PATH.parent / "cache"))
 CACHE_MAX_BYTES = int(float(os.environ.get("AQUARIA_CACHE_GB", "2")) * 1e9)
+# Playlist cover images, <playlist id>.jpg.
+COVERS_DIR = Path(os.environ.get("AQUARIA_COVERS", DB_PATH.parent / "playlist-covers"))
 
 # Where genre-folder artwork is looked up, by genre label ("0_POP" -> "POP").
 # Default for any genre is Deezer's genre of the same name ("deezer:POP" matches "Pop").

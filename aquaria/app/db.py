@@ -150,6 +150,9 @@ MIGRATIONS = {
         "lastfm_user":    "TEXT",
         "lastfm_session": "TEXT",
     },
+    "playlists": {
+        "cover": "REAL",                        # cover image mtime; NULL = no cover
+    },
     "ipods": {
         "sync":        "TEXT NOT NULL DEFAULT '{}'",   # JSON sync profile, see ipods.py
         "last_sync":   "REAL",
