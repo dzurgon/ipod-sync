@@ -9,6 +9,7 @@ sync API (ipods.py). Guests can read; writes need a logged-in user.
 
 from __future__ import annotations
 
+import hashlib
 import shutil
 import subprocess
 import threading
@@ -134,25 +135,50 @@ def media(rel_path: str, request: Request):
     return FileResponse(f, media_type=AUDIO_TYPES.get(f.suffix.lower()))
 
 
+_convert_locks: dict[str, threading.Lock] = {}
+_convert_guard = threading.Lock()
+
+
+def _evict_cache(keep: Path) -> None:
+    files = sorted(config.CACHE_DIR.glob("*.flac"), key=lambda p: p.stat().st_mtime)
+    total = sum(p.stat().st_size for p in files)
+    for p in files:
+        if total <= config.CACHE_MAX_BYTES:
+            break
+        if p != keep:
+            total -= p.stat().st_size
+            p.unlink(missing_ok=True)
+
+
 @app.get("/stream/{rel_path:path}")
 def stream(rel_path: str):
-    """The track converted to FLAC on the fly — for formats the browser can't decode
-    (AIFF in Chrome/Firefox, Apple Lossless .m4a). Lossless; no seeking ahead."""
+    """The track converted to FLAC, for formats the browser can't decode (AIFF in
+    Chrome/Firefox, Apple Lossless .m4a). Converted whole (~0.2 s a track) and cached, so
+    the browser sees the real length and can seek — a live pipe has neither."""
     f = _music_file(rel_path)
     ffmpeg = shutil.which("ffmpeg")
     if not ffmpeg:
         raise HTTPException(501, "ffmpeg isn't installed on the server")
-    proc = subprocess.Popen([ffmpeg, "-v", "error", "-i", str(f), "-map", "0:a:0", "-c:a", "flac",
-                             "-f", "flac", "pipe:1"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-
-    def chunks():
-        try:
-            while data := proc.stdout.read(64 * 1024):
-                yield data
-        finally:                                   # client left or track ended
-            proc.kill()
-            proc.wait()
-    return StreamingResponse(chunks(), media_type="audio/flac")
+    st = f.stat()
+    key = hashlib.sha1(f"{rel_path}\0{st.st_mtime_ns}\0{st.st_size}".encode()).hexdigest()
+    out = config.CACHE_DIR / f"{key}.flac"
+    with _convert_guard:
+        lock = _convert_locks.setdefault(key, threading.Lock())
+    with lock:                                     # one conversion per track at a time
+        if not out.exists():
+            config.CACHE_DIR.mkdir(parents=True, exist_ok=True)
+            tmp = out.with_suffix(".part")
+            r = subprocess.run([ffmpeg, "-v", "error", "-y", "-i", str(f), "-map", "0:a:0",
+                                "-c:a", "flac", "-compression_level", "0", "-f", "flac", str(tmp)],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=300)
+            if r.returncode:
+                tmp.unlink(missing_ok=True)
+                raise HTTPException(500, "couldn't convert: " + r.stderr.decode(errors="replace")[-200:])
+            tmp.replace(out)
+            _evict_cache(keep=out)
+        else:
+            out.touch()                            # recently played stays cached
+    return FileResponse(out, media_type="audio/flac")
 
 
 @app.get("/art/{folder:path}")

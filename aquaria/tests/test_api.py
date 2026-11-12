@@ -112,6 +112,29 @@ def test_audio_served_with_real_types(client, monkeypatch):
     assert client.get("/stream/" + track).status_code == 501      # no ffmpeg → clear error
 
 
+def test_stream_converts_once_and_serves_a_seekable_file(client, monkeypatch, tmp_path):
+    import app.main as m
+    calls = tmp_path / "calls"
+    fake = tmp_path / "ffmpeg"                  # stand-in: writes 1000 bytes to its output path
+    fake.write_text(f'#!/bin/sh\necho x >> "{calls}"\nfor a; do out="$a"; done\n'
+                    'head -c 1000 /dev/zero > "$out"\n')
+    fake.chmod(0o755)
+    monkeypatch.setattr(m.shutil, "which", lambda _: str(fake))
+    monkeypatch.setattr(m.config, "CACHE_DIR", tmp_path / "cache")
+    lib = Path(client.get("/healthz").json()["music_root"])
+    a, b = [t.relative_to(lib).as_posix() for t in sorted(lib.rglob("*.flac"))[:2]]
+
+    r = client.get("/stream/" + a)
+    assert r.status_code == 200 and r.headers["content-length"] == "1000"   # length known
+    r = client.get("/stream/" + a, headers={"Range": "bytes=500-"})
+    assert r.status_code == 206 and len(r.content) == 500                    # seekable
+    assert calls.read_text().count("x") == 1                                 # converted once
+
+    monkeypatch.setattr(m.config, "CACHE_MAX_BYTES", 1500)                    # room for one
+    client.get("/stream/" + b)
+    assert len(list((tmp_path / "cache").glob("*.flac"))) == 1
+
+
 def test_scan_summary_counts(client):
     r = client.post("/api/scan").json()
     assert r["added"] == 0 and r["pruned"] == 0 and r["tracks"] > 0

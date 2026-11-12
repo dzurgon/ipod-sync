@@ -10,6 +10,9 @@ MUSIC_ROOT = Path(os.environ.get("AQUARIA_MUSIC_ROOT", "/mnt/data/media/music/FL
 PLAYLIST_DIR = Path(os.environ.get("AQUARIA_PLAYLIST_DIR", "/mnt/data/media/music/Playlists"))
 DB_PATH = Path(os.environ.get("AQUARIA_DB", "/data/aquaria.db"))
 PORT = int(os.environ.get("AQUARIA_PORT", "8337"))
+# Tracks converted for the browser (ALAC, AIFF) are cached here, oldest evicted past the cap.
+CACHE_DIR = Path(os.environ.get("AQUARIA_CACHE", DB_PATH.parent / "cache"))
+CACHE_MAX_BYTES = int(float(os.environ.get("AQUARIA_CACHE_GB", "2")) * 1e9)
 
 # Where genre-folder artwork is looked up, by genre label ("0_POP" -> "POP").
 # Default for any genre is Deezer's genre of the same name ("deezer:POP" matches "Pop").
