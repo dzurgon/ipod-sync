@@ -136,3 +136,24 @@ def test_unlink(client):
     client.delete(f"/api/ipods/{ip['id']}")
     assert client.get("/api/ipods").json()["ipods"] == []
     assert [u["signature"] for u in client.get("/api/ipods").json()["unclaimed"]] == [SIG]
+
+
+def test_same_ipod_under_another_serial_is_not_a_new_device(client):
+    rockbox, apple = "300000000000A2700149D8299", "000A2700149D8299"   # one iPod, two firmwares
+    meta = lambda serial, fs="5906-AD78": {"metadata": {"usb_serial": serial, "fs_uuid": fs}}
+    client.post(f"/api/host/ipods/{rockbox}/seen", headers=H, json=meta(rockbox))
+    link(client, rockbox, "JiminPod")
+
+    r = client.post(f"/api/host/ipods/{apple}/seen", headers=H, json=meta(apple)).json()
+    assert r == {"linked": True, "name": "JiminPod", "owner": "jimin"}
+    assert client.get(f"/api/host/ipods/{apple}/plan", headers=H).status_code == 200
+    mine = client.get("/api/ipods").json()
+    assert mine["unclaimed"] == [] and [i["name"] for i in mine["ipods"]] == ["JiminPod"]
+    assert client.post("/api/ipods", json={"signature": apple, "name": "dupe"}).status_code == 409
+
+    client.post(f"/api/host/ipods/{apple}/report", headers=H, json={"status": "syncing"})
+    assert client.get("/api/ipods").json()["ipods"][0]["host"]["state"] == "syncing"
+
+    # A different iPod (other disk, unrelated serial) is still new.
+    client.post("/api/host/ipods/000A2700FFFF0000/seen", headers=H, json=meta("000A2700FFFF0000", "1234-ABCD"))
+    assert [u["signature"] for u in client.get("/api/ipods").json()["unclaimed"]] == ["000A2700FFFF0000"]

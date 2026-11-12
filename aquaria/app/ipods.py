@@ -207,16 +207,19 @@ def _my_ipod(ipod_id: int, user: dict) -> dict:
 def my_ipods(user: dict = Depends(require_user)):
     mine = [_profile(r) for r in state.conn.execute(
         "SELECT * FROM ipods WHERE user_id=? ORDER BY name", (user["id"],))]
+    sightings = [(r["signature"], json.loads(r["metadata"])) for r in state.conn.execute(
+        "SELECT signature, metadata FROM ipod_sightings ORDER BY last_seen DESC")]
     for ip in mine:
-        s = state.conn.execute("SELECT metadata, last_seen FROM ipod_sightings WHERE signature=?",
-                               (ip["signature"],)).fetchone()
-        ip["host"] = json.loads(s["metadata"]) if s else {}
+        # Live state comes from this iPod's latest sighting, under whichever signature.
+        ip["host"] = next((m for sig, m in sightings
+                           if sig == ip["signature"] or same_device(m, ip["metadata"])), {})
         ip["summary"] = build_plan(ip, user["id"])["summary"]
     month = time.time() - 30 * 86400
     unclaimed = [dict(r) | {"metadata": json.loads(r["metadata"])} for r in state.conn.execute(
         "SELECT signature, metadata, first_seen, last_seen FROM ipod_sightings s "
         "WHERE last_seen > ? AND NOT EXISTS (SELECT 1 FROM ipods i WHERE i.signature=s.signature) "
         "ORDER BY last_seen DESC", (month,))]
+    unclaimed = [u for u in unclaimed if not _twin(u["signature"], u["metadata"])]
     genres = [dict(r) for r in state.conn.execute("SELECT rel_dir, genre FROM genre_folders ORDER BY rel_dir")]
     return {"ipods": mine, "unclaimed": unclaimed, "genres": genres}
 
@@ -227,10 +230,11 @@ def link_ipod(body: LinkIpod, user: dict = Depends(require_user)):
     if not state.conn.execute("SELECT 1 FROM ipod_sightings WHERE signature=?",
                               (body.signature,)).fetchone():
         raise HTTPException(404, "connect the iPod to the server first so it can be detected")
-    if state.conn.execute("SELECT 1 FROM ipods WHERE signature=?", (body.signature,)).fetchone():
-        raise HTTPException(409, "that iPod is already linked to an account")
     meta = state.conn.execute("SELECT metadata FROM ipod_sightings WHERE signature=?",
                               (body.signature,)).fetchone()["metadata"]
+    if state.conn.execute("SELECT 1 FROM ipods WHERE signature=?", (body.signature,)).fetchone() \
+            or _twin(body.signature, json.loads(meta)):
+        raise HTTPException(409, "that iPod is already linked to an account")
     with state.write_lock:
         iid = state.conn.execute(
             "INSERT INTO ipods(user_id, name, signature, metadata, layout, last_seen, created_at, sync) "
@@ -290,8 +294,29 @@ def require_host(x_aquaria_token: str = Header(default="")) -> None:
         raise HTTPException(401, "bad host token")
 
 
+def same_device(a: dict, b: dict) -> bool:
+    """Do two sightings' metadata describe one iPod? The FAT volume ID survives a firmware
+    switch; the USB serial doesn't quite (Apple firmware reports the bare FireWire GUID,
+    Rockbox the same GUID with a prefix), so a serial ending with the other also matches."""
+    if a.get("fs_uuid") and a.get("fs_uuid") == b.get("fs_uuid"):
+        return True
+    x, y = sorted((a.get("usb_serial") or "", b.get("usb_serial") or ""), key=len)
+    return len(x) >= 12 and y.endswith(x)
+
+
+def _twin(sig: str, meta: dict):
+    """The linked iPod that is this same device under another signature, if any."""
+    for row in state.conn.execute("SELECT * FROM ipods WHERE signature<>?", (sig,)):
+        if same_device(meta, json.loads(row["metadata"] or "{}")):
+            return row
+    return None
+
+
 def _linked(sig: str):
     row = state.conn.execute("SELECT * FROM ipods WHERE signature=?", (sig,)).fetchone()
+    if not row:
+        s = state.conn.execute("SELECT metadata FROM ipod_sightings WHERE signature=?", (sig,)).fetchone()
+        row = s and _twin(sig, json.loads(s["metadata"]))
     return _profile(row) | {"user_id": row["user_id"]} if row else None
 
 
