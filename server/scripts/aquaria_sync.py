@@ -227,6 +227,42 @@ def _safe_name(name: str) -> str:
     return "".join("_" if c in '/\\:*?"<>|' else c for c in name).strip() or "playlist"
 
 
+IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".webp")
+
+
+def _has_images(folder: Path) -> bool:
+    return any(f.lower().endswith(IMAGE_EXTS) for _, _, files in os.walk(folder) for f in files)
+
+
+def _place(src: Path, target: Path, root: Path, sig: str) -> None:
+    """Stage src at target: a symlink, except that artwork is swapped for the small
+    baseline JPEG Aquaria makes for iPods (written as <name>.jpg; the library's original
+    is untouched). Folders holding artwork are rebuilt file by file to make room for it."""
+    if src.is_dir():
+        if not _has_images(src):
+            target.symlink_to(src)
+            return
+        target.mkdir()
+        for child in sorted(src.iterdir()):           # cover.jpg before cover.png
+            if not child.name.startswith("."):
+                _place(child, target / child.name, root, sig)
+    elif src.suffix.lower() in IMAGE_EXTS:
+        out = target.with_suffix(".jpg")
+        if out.exists():
+            return                                     # cover.jpg and cover.png: first wins
+        try:
+            art = fetch(sig_path(sig) + "/art/" + urllib.parse.quote(src.relative_to(root).as_posix()))
+        except Unreachable as e:
+            print(f"  artwork skipped ({e})", file=sys.stderr)
+            art = None
+        if art:
+            out.write_bytes(art)
+            st = src.stat()
+            os.utime(out, ns=(st.st_atime_ns, st.st_mtime_ns))   # same file next sync → no recopy
+    else:
+        target.symlink_to(src)
+
+
 def cmd_stage(a) -> int:
     root, out = Path(a.music_root), Path(a.out)
     plan = api("GET", sig_path(a.sig) + "/plan")
@@ -250,7 +286,7 @@ def cmd_stage(a) -> int:
         target.parent.mkdir(parents=True, exist_ok=True)
         if target.exists() or target.is_symlink():
             continue                                   # flat-layout collision: first wins
-        target.symlink_to(src)
+        _place(src, target, root, a.sig)
         linked.add(dst)
 
     names = []

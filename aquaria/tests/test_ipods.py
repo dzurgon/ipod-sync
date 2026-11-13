@@ -184,3 +184,25 @@ def test_playlist_cover_shows_in_app_and_travels_to_the_ipod(client, other):
     assert client.delete(f"/api/playlists/{pid}/cover").json()["cover"] is None
     assert client.get(f"/playlist-cover/{pid}").status_code == 404
     assert client.get(f"/api/host/ipods/{SIG}/playlists/{pid}/cover", headers=H).status_code == 404
+
+
+def test_ipod_gets_small_baseline_artwork(client, tmp_path):
+    import io
+    from PIL import Image
+    seen(client); link(client)
+    album = tmp_path / "lib/0_POP/Charli XCX/BRAT (2025)"
+    Image.new("RGB", (2800, 2800), "lime").save(album / "cover.jpg", "JPEG", progressive=True)
+    Image.new("RGB", (6000, 4000), "red").save(album / "back.png")
+
+    url = f"/api/host/ipods/{SIG}/art/0_POP/Charli XCX/BRAT (2025)/"
+    for name, size in (("cover.jpg", (320, 320)), ("back.png", (320, 213))):
+        r = client.get(url + name, headers=H)
+        img = Image.open(io.BytesIO(r.content))
+        assert r.headers["content-type"] == "image/jpeg" and img.format == "JPEG"
+        assert img.size == size and not img.info.get("progressive")
+    assert client.get(url + "../../../../data/aquaria.db", headers=H).status_code == 404
+    assert client.get(f"/api/host/ipods/{SIG}/art/" + "0_POP/Charli XCX/BRAT (2025)/01 - 360.flac",
+                      headers=H).status_code == 404
+    assert client.get(f"/api/host/ipods/NOPE/art/0_POP/Charli XCX/BRAT (2025)/cover.jpg",
+                      headers=H).status_code == 404
+    assert len(list((tmp_path / "data/ipod-art").glob("*.jpg"))) == 2

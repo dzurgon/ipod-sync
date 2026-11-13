@@ -19,8 +19,10 @@ sources or a manual upload:
 
 from __future__ import annotations
 
+import hashlib
 import io
 import json
+import os
 import threading
 import time
 import urllib.parse
@@ -127,6 +129,23 @@ def to_jpeg(data: bytes) -> bytes:
     except Exception as e:
         raise ValueError(f"could not read image: {e}")
     return out.getvalue()
+
+
+def ipod_art(src: Path, cache_dir: Path, max_px: int) -> Path:
+    """A baseline JPEG of src no larger than max_px, cached by path + mtime + size."""
+    st = src.stat()
+    key = hashlib.sha1(f"{src}\0{st.st_mtime_ns}\0{st.st_size}\0{max_px}".encode()).hexdigest()
+    out = cache_dir / f"{key}.jpg"
+    if out.is_file():
+        return out
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    img = Image.open(src)
+    img.draft("RGB", (max_px, max_px))         # JPEG: decode at reduced scale, much faster
+    img.thumbnail((max_px, max_px))
+    tmp = out.with_suffix(f".{os.getpid()}.tmp")
+    img.convert("RGB").save(tmp, "JPEG", quality=88, progressive=False)
+    tmp.replace(out)
+    return out
 
 
 def save_cover(music_root: Path, rel_dir: str, data: bytes) -> str:

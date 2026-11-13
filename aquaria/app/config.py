@@ -13,6 +13,10 @@ PORT = int(os.environ.get("AQUARIA_PORT", "8337"))
 # Tracks converted for the browser (ALAC, AIFF) are cached here, oldest evicted past the cap.
 CACHE_DIR = Path(os.environ.get("AQUARIA_CACHE", DB_PATH.parent / "cache"))
 CACHE_MAX_BYTES = int(float(os.environ.get("AQUARIA_CACHE_GB", "2")) * 1e9)
+# Artwork as the iPod gets it: baseline JPEG, at most IPOD_ART_PX (its screen is 320 wide).
+# Rockbox can't decode progressive JPEGs and crawls through multi-megapixel ones.
+IPOD_ART_DIR = Path(os.environ.get("AQUARIA_IPOD_ART", DB_PATH.parent / "ipod-art"))
+IPOD_ART_PX = int(os.environ.get("AQUARIA_IPOD_ART_PX", "320"))
 # Playlist cover images, <playlist id>.jpg.
 COVERS_DIR = Path(os.environ.get("AQUARIA_COVERS", DB_PATH.parent / "playlist-covers"))
 

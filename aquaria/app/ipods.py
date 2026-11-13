@@ -35,7 +35,8 @@ from fastapi import APIRouter, Depends, Header, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from . import config, indexer, playlists, state
+from . import config, folder_art, indexer, playlists, state
+from .indexer import IMAGE_EXTS
 from .accounts import require_user
 from .parser import parse_genre
 
@@ -398,6 +399,20 @@ def host_plan(sig: str):
     with state.write_lock:
         indexer.scan(state.conn, config.MUSIC_ROOT)
     return build_plan(ip, ip["user_id"])
+
+
+@router.get("/api/host/ipods/{sig}/art/{rel_path:path}", dependencies=[Depends(require_host)])
+def host_art(sig: str, rel_path: str):
+    """An artwork file from the library, shrunk to what an iPod can show quickly."""
+    root = config.MUSIC_ROOT.resolve()
+    f = (root / rel_path).resolve()
+    if not _linked(sig) or root not in f.parents or not f.is_file() or f.suffix.lower() not in IMAGE_EXTS:
+        raise HTTPException(404, "no such image")
+    try:
+        out = folder_art.ipod_art(f, config.IPOD_ART_DIR, config.IPOD_ART_PX)
+    except Exception as e:
+        raise HTTPException(422, f"unreadable image: {e}")
+    return FileResponse(out, media_type="image/jpeg")
 
 
 @router.get("/api/host/ipods/{sig}/playlists/{playlist_id}/cover", dependencies=[Depends(require_host)])
