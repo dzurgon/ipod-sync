@@ -29,7 +29,10 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-from PIL import Image
+from PIL import Image, ImageFile
+
+# A cover missing its last few bytes (an interrupted download) still decodes fine.
+ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 from . import config
 from .indexer import IMAGE_EXTS, find_folder_image, norm_key
