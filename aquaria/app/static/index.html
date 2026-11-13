@@ -570,6 +570,7 @@ let TREE = null;
 // ── Folder artwork: <folder>/<folder name>.jpg for genre + artist folders ──
 let ARTDIRS = {};              // artist rel_dir -> {rel_dir, artist_key, artist, image}
 let GENREDIRS = {};            // genre rel_dir  -> {rel_dir, genre, image}
+let NOCOVER = [];              // album folders with no cover: {rel_dir, artist, album, year}
 let IMGV = Date.now();         // cache-buster, bumped whenever a photo changes
 const imgUrl = rel => "/media/" + enc(rel) + "?v=" + IMGV;
 
@@ -577,6 +578,7 @@ async function loadArtDirs(){
   const fa = await api("/api/folder-art");
   ARTDIRS = Object.fromEntries(fa.artists.map(f=>[f.rel_dir, f]));
   GENREDIRS = Object.fromEntries(fa.genres.map(f=>[f.rel_dir, f]));
+  NOCOVER = fa.albums_missing.map(a=>({...a, album_dir: true}));
 }
 
 function artistHeader(dirs, title, sub, genre=false){
@@ -698,21 +700,21 @@ async function renderLibrary(){
   }
 }
 
-// Genre + artist folders with no <Folder>/<Folder>.jpg yet, genres first.
+// Genre + artist folders with no <Folder>/<Folder>.jpg yet, and albums with no cover.jpg.
 const missingArt = () => Object.values(GENREDIRS).concat(Object.values(ARTDIRS))
-  .filter(d=>!d.image).sort((a,b)=>a.rel_dir.localeCompare(b.rel_dir));
-const artPath = d => `${d.rel_dir}/${d.rel_dir.split("/").pop()}.jpg`;
+  .filter(d=>!d.image).concat(NOCOVER).sort((a,b)=>a.rel_dir.localeCompare(b.rel_dir));
+const artPath = d => d.album_dir ? `${d.rel_dir}/cover.jpg` : `${d.rel_dir}/${d.rel_dir.split("/").pop()}.jpg`;
 
 function fetchBar(){
   if(!ME) return "";
   const miss = missingArt();
   return `<div class="bar" style="display:flex;gap:10px;align-items:center;margin-bottom:${miss.length?6:16}px;flex-wrap:wrap">
-    <button class="btn" id="fetchMissing" ${miss.length?'':'disabled'}>🔍 Fetch missing genre &amp; artist artwork (${miss.length})</button>
+    <button class="btn" id="fetchMissing" ${miss.length?'':'disabled'} title="Albums: art embedded in their files first, else Deezer / iTunes">🔍 Fetch missing artwork (${miss.length})</button>
     <small class="sub" id="fetchStatus" style="margin:0"></small></div>
   ${miss.length ? `<details class="missing" style="margin-bottom:16px"><summary class="sub" style="cursor:pointer;margin:0">
       Show the ${miss.length} missing file${miss.length===1?'':'s'}</summary>
     <div class="list" id="missingList" style="margin-top:8px">${miss.map(d=>`
-      <a class="row click" data-link href="/library/${enc(d.rel_dir)}" data-rel="${esc(d.rel_dir)}">
+      <a class="row click" data-link href="${d.album_dir ? '/album/' : '/library/'}${enc(d.rel_dir)}" data-rel="${esc(d.rel_dir)}">
         <div class="main"><code>${esc(artPath(d))}</code></div>
         <div class="r-genre nf" hidden>not found online</div>
       </a>`).join("")}</div></details>` : ""}`;
@@ -733,12 +735,13 @@ async function pollFetch(){
     st.textContent = `Fetching… ${j.done}/${j.total} · ${j.found} found`;
     setTimeout(pollFetch, 1500);
   } else if(j.total){
-    st.textContent = `Last run: ${j.found} of ${j.total} found` +
+    const src = Object.entries(j.sources||{}).map(([k,n])=>`${n} ${k}`).join(", ");
+    st.textContent = `Last run: ${j.found} of ${j.total} found` + (src ? ` (${src})` : "") +
       (j.missing.length ? ` — nothing found online for ${j.missing.length}; upload those from their folders` : "");
     const nf = new Set(j.missing);
     document.querySelectorAll("#missingList [data-rel]").forEach(r=>
       r.querySelector(".nf").hidden = !nf.has(r.dataset.rel));
-    if(FETCHING){ FETCHING = false; IMGV = Date.now(); renderLibrary(); }
+    if(FETCHING){ FETCHING = false; IMGV = Date.now(); await loadArtDirs(); renderLibrary(); }
   }
 }
 
@@ -772,7 +775,7 @@ async function renderAlbum(folder){
   const parentLabel = parent.length ? (parent.length===1 ? genreLabel(parent[0]) : parent[parent.length-1]) : "Library";
   $("#panel").innerHTML = `${backLink("/library/"+enc(parent.join("/")), parentLabel)}
     <div class="head">
-      <div class="thumb"><img src="/art/${enc(folder)}?v=${IMGV}" onerror="this.replaceWith('💿')"></div>
+      <div class="thumb"><img src="/art/${enc(folder)}?v=${IMGV}" onerror="this.replaceWith('💿'); document.getElementById('findCover')?.removeAttribute('hidden')"></div>
       <div class="info">
         <h2>${esc(al.album)}${yr(al.year)}</h2>
         <div class="sub" style="margin:0">${esc(al.artist)}${al.genre?' · '+esc(al.genre):''} · ${tracks.length} tracks</div>
@@ -781,6 +784,7 @@ async function renderAlbum(folder){
           <button class="btn" id="shufAll">🔀 Shuffle</button>
           <a class="btn" href="/download/album?folder=${encodeURIComponent(folder)}">⬇ Download album (.zip)</a>
           <button class="btn" data-add id="addAll">＋ Add to playlist</button>
+          ${ME ? `<button class="btn" id="findCover" hidden title="From the album's own files, else Deezer / iTunes">🔍 Find cover</button>` : ""}
           ${ME ? `<label class="btn" title="Saved as cover.jpg in the album folder">⬆ Upload cover<input type="file" id="coverUpload" accept="image/jpeg,image/png,image/webp" hidden></label>` : ""}
         </div>
       </div>
@@ -799,6 +803,13 @@ async function renderAlbum(folder){
   $("#playAll").onclick = ()=>play(tracks, 0);
   $("#shufAll").onclick = ()=>shufflePlay(tracks);
   $("#addAll").onclick = e=>{ e.stopPropagation(); showAddPop(e.currentTarget, {folder}); };
+  if(ME) $("#findCover").onclick = async e=>{
+    e.currentTarget.disabled = true; e.currentTarget.textContent = "🔍 Looking…";
+    try {
+      const r = await post("/api/folder-art/fetch", {rel_dir: folder});
+      IMGV = Date.now(); toast(`Cover found (${r.source})`); renderAlbum(folder);
+    } catch(err){ toast(err.message); e.currentTarget.disabled = false; e.currentTarget.textContent = "🔍 Find cover"; }
+  };
   if(ME) $("#coverUpload").onchange = async e=>{
     const f = e.target.files[0]; if(!f) return;
     const fd = new FormData(); fd.append("rel_dir", folder); fd.append("file", f);

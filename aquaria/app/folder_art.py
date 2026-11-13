@@ -15,6 +15,9 @@ sources or a manual upload:
     only, so an ambiguous artist gets no photo rather than the wrong one.
   * genres  — config.GENRE_ART_SOURCES: Deezer's genre artwork by name, or a
     Wikipedia article's lead image (e.g. the KWUR station logo).
+  * albums  — artwork embedded in the album's own files first (exact, offline), then
+    Deezer and iTunes album search by artist + album name. Only matching artist and
+    title are accepted (ignoring [VINYL]-style tags); iTunes prefers the folder's year.
 """
 
 from __future__ import annotations
@@ -23,6 +26,9 @@ import hashlib
 import io
 import json
 import os
+import re
+import shutil
+import subprocess
 import threading
 import time
 import urllib.parse
@@ -39,6 +45,8 @@ from .indexer import IMAGE_EXTS, find_folder_image, norm_key
 
 DEEZER_SEARCH = "https://api.deezer.com/search/artist?limit=10&q="
 DEEZER_GENRES = "https://api.deezer.com/genre"
+DEEZER_ALBUMS = "https://api.deezer.com/search/album?limit=10&q="
+ITUNES_ALBUMS = "https://itunes.apple.com/search?entity=album&limit=25&term="
 WIKI_SUMMARY = "https://en.wikipedia.org/api/rest_v1/page/summary/"
 USER_AGENT = "Aquaria/0.4 (self-hosted music manager)"
 MAX_BYTES = 15 * 2**20
@@ -99,6 +107,84 @@ def genre_lookup(genre: str) -> str | None:
     if source == "wikipedia":
         return wikipedia_image(name)
     return deezer_genre(name)
+
+
+# What the album page shows as the cover (GET /art), in order.
+ALBUM_ART_NAMES = ("cover.jpg", "cover.png", "cover.jpeg", "cover.webp", "folder.jpg")
+
+
+def album_cover(folder: Path) -> Path | None:
+    return next((folder / n for n in ALBUM_ART_NAMES if (folder / n).is_file()), None)
+
+
+def missing_album_covers(conn, music_root: Path) -> list[dict]:
+    """Albums (as the library lists them) whose folder has no cover image."""
+    from .library import _albums
+    return [{"rel_dir": a["folder"], "artist": a["artist"], "album": a["album"], "year": a["year"]}
+            for a in _albums(conn) if a["folder"] and not album_cover(music_root / a["folder"])]
+
+
+def embedded_art(files: list[Path]) -> bytes | None:
+    """The picture embedded in the first of these tracks that has one (ffmpeg)."""
+    ffmpeg = shutil.which("ffmpeg")
+    for f in files[:4] if ffmpeg else []:
+        r = subprocess.run([ffmpeg, "-v", "error", "-i", str(f), "-map", "0:v:0", "-frames:v", "1",
+                            "-c", "copy", "-f", "image2pipe", "pipe:1"],
+                           capture_output=True, timeout=30)
+        if r.returncode == 0 and sniff_ext(r.stdout):
+            return r.stdout
+    return None
+
+
+def _core(s: str) -> str:
+    """Name for matching: drop (…)/[…] parts like (Deluxe Edition) or [VINYL] [FLAC]."""
+    return norm_key(re.sub(r"[\(\[][^)\]]*[\)\]]", " ", s or ""))
+
+
+def deezer_album(artist: str, album: str) -> str | None:
+    q = f'artist:"{artist}" album:"{album}"'
+    for a in json.loads(_get(DEEZER_ALBUMS + urllib.parse.quote(q))).get("data", []):
+        if (_core(a.get("artist", {}).get("name", "")) == _core(artist)
+                and _core(a.get("title", "")) == _core(album) and _real(a.get("cover_xl"))):
+            return a["cover_xl"]
+    return None
+
+
+_itunes_last = 0.0
+
+
+def itunes_album(artist: str, album: str, year: int | None) -> str | None:
+    global _itunes_last
+    time.sleep(max(0.0, _itunes_last + 3 - time.time()))   # iTunes allows ~20 searches/min
+    _itunes_last = time.time()
+    data = json.loads(_get(ITUNES_ALBUMS + urllib.parse.quote(f"{artist} {album}")))
+    hits = [r for r in data.get("results", [])
+            if _core(r.get("artistName", "")) == _core(artist)
+            and _core(r.get("collectionName", "")) == _core(album) and r.get("artworkUrl100")]
+    if not hits:
+        return None
+    best = next((r for r in hits if year and str(r.get("releaseDate", "")).startswith(str(year))), hits[0])
+    return best["artworkUrl100"].replace("100x100bb", "1000x1000bb")
+
+
+def fetch_album(conn, music_root: Path, rel_dir: str) -> tuple[str, str] | None:
+    """Find + save cover.jpg for an album folder: embedded art, else Deezer, else iTunes.
+    Returns (image rel_path, where it came from) or None."""
+    rows = conn.execute(
+        "SELECT rel_path, artist, artist_inferred, album, year FROM tracks "
+        "WHERE substr(rel_path, 1, length(?1) + 1) = ?1 || '/' ORDER BY rel_path", (rel_dir,)).fetchall()
+    if not rows:
+        raise FileNotFoundError(rel_dir)
+    data, source = embedded_art([music_root / r["rel_path"] for r in rows]), "embedded in the files"
+    t = rows[0]
+    if not data and t["artist"] and not t["artist_inferred"]:
+        url, source = deezer_album(t["artist"], t["album"]), "Deezer"
+        if not url:
+            url, source = itunes_album(t["artist"], t["album"], t["year"]), "iTunes"
+        data = url and _get(url)
+    if not data:
+        return None
+    return save_cover(music_root, rel_dir, data), source
 
 
 def kind_of(conn, rel_dir: str) -> tuple[str, str] | None:
@@ -216,29 +302,38 @@ def fetch_one(conn, music_root: Path, rel_dir: str) -> str | None:
 
 # ── Bulk "fetch all missing" job (one at a time, in a background thread) ─────
 
-JOB = {"running": False, "done": 0, "total": 0, "found": 0, "missing": [], "error": None}
+JOB = {"running": False, "done": 0, "total": 0, "found": 0, "missing": [], "error": None,
+       "sources": {}}
 _job_lock = threading.Lock()
 
 
 def start_fetch_missing(conn, music_root: Path, write_lock: threading.Lock,
-                        kinds: tuple[str, ...] = ("genre", "artist")) -> dict:
+                        kinds: tuple[str, ...] = ("genre", "artist", "album")) -> dict:
     with _job_lock:
         if JOB["running"]:
             return dict(JOB)
-        dirs = [r["rel_dir"] for k in kinds for r in conn.execute(
+        todo = [(k, r["rel_dir"]) for k in kinds if k in KINDS for r in conn.execute(
             f"SELECT rel_dir FROM {KINDS[k][0]} WHERE image IS NULL ORDER BY rel_dir")]
-        JOB.update(running=True, done=0, total=len(dirs), found=0, missing=[], error=None)
+        if "album" in kinds:
+            todo += [("album", a["rel_dir"]) for a in missing_album_covers(conn, music_root)]
+        JOB.update(running=True, done=0, total=len(todo), found=0, missing=[], error=None, sources={})
 
     def run():
         try:
-            for rel_dir in dirs:
+            for kind, rel_dir in todo:
                 try:
-                    with write_lock:
-                        got = fetch_one(conn, music_root, rel_dir)
+                    if kind == "album":
+                        got = fetch_album(conn, music_root, rel_dir)   # slow I/O outside the lock
+                        source = got and got[1]
+                    else:
+                        with write_lock:
+                            got = fetch_one(conn, music_root, rel_dir)
+                        source = "Deezer" if kind == "artist" else "genre art"
                 except Exception as e:          # network hiccup etc. — note it, keep going
                     got, JOB["error"] = None, f"{rel_dir}: {e}"
                 if got:
                     JOB["found"] += 1
+                    JOB["sources"][source] = JOB["sources"].get(source, 0) + 1
                 else:
                     JOB["missing"].append(rel_dir)
                 JOB["done"] += 1

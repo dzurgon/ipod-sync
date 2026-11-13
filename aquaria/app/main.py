@@ -183,12 +183,12 @@ def stream(rel_path: str):
 
 @app.get("/art/{folder:path}")
 def art(folder: str, request: Request):
-    d = (config.MUSIC_ROOT / folder).resolve()
-    for name in ("cover.jpg", "cover.png", "cover.jpeg", "cover.webp", "folder.jpg"):
-        p = d / name
-        if p.is_file():
-            return _image(request, p)
-    raise HTTPException(404, "no art")
+    root = config.MUSIC_ROOT.resolve()
+    d = (root / folder).resolve()
+    p = folder_art.album_cover(d) if root in d.parents else None
+    if not p:
+        raise HTTPException(404, "no art")
+    return _image(request, p)
 
 
 # ── Downloads ────────────────────────────────────────────────────────────────
@@ -432,13 +432,22 @@ def folder_art_list():
             "SELECT rel_dir, genre, image FROM genre_folders ORDER BY rel_dir")],
         "artists": [dict(r) for r in conn.execute(
             "SELECT rel_dir, artist_key, artist, image FROM artist_folders ORDER BY artist_key")],
+        "albums_missing": folder_art.missing_album_covers(conn, config.MUSIC_ROOT),
     }
 
 
 @app.post("/api/folder-art/fetch", dependencies=[Depends(require_user)])
 def folder_art_fetch(body: FolderRef):
     if (folder_art.kind_of(conn, body.rel_dir) or ("",))[0] == "album":
-        raise HTTPException(400, "album covers come from beets (fetchart) — upload one instead")
+        try:
+            got = folder_art.fetch_album(conn, config.MUSIC_ROOT, body.rel_dir)
+        except FileNotFoundError:
+            raise HTTPException(404, "not an album folder")
+        except OSError as e:
+            raise HTTPException(502, f"lookup failed: {e}")
+        if not got:
+            raise HTTPException(404, "no embedded artwork and no exact match online — upload one instead")
+        return {"image": got[0], "source": got[1]}
     try:
         with write_lock:
             img = folder_art.fetch_one(conn, config.MUSIC_ROOT, body.rel_dir)

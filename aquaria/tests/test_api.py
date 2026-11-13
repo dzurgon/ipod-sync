@@ -232,7 +232,6 @@ def test_album_cover_upload_becomes_baseline_jpeg(client):
     r = client.post("/api/folder-art/upload", data={"rel_dir": "0_POP/Passion Pit - Gossamer (2013)"},
                     files={"file": ("x.jpg", buf.getvalue(), "image/png")})
     assert r.status_code == 200
-    assert client.post("/api/folder-art/fetch", json={"rel_dir": album}).status_code == 400
     assert client.post("/api/folder-art/upload", data={"rel_dir": "0_POP/Charli"},
                        files={"file": ("x.png", PNG, "image/png")}).status_code == 404
 
@@ -244,3 +243,58 @@ def test_page_urls_serve_the_app(client):
         assert r.status_code == 200 and "<title>Aquaria" in r.text, url
     assert client.get("/api/stats").headers["content-type"].startswith("application/json")
     assert client.get("/nope").status_code == 404
+
+
+def _real_jpeg(color="navy", size=(1400, 1400)):
+    from PIL import Image
+    b = io.BytesIO(); Image.new("RGB", size, color).save(b, "JPEG"); return b.getvalue()
+
+
+def test_missing_album_covers_listed_and_fetched(client, monkeypatch):
+    from app import folder_art
+    missing = {a["rel_dir"]: a for a in client.get("/api/folder-art").json()["albums_missing"]}
+    assert "0_POP/Charli XCX/BRAT (2025)" not in missing             # has cover.jpg
+    rh = missing["0_ROCK/Radiohead/OK Computer (1997)"]
+    assert (rh["artist"], rh["album"], rh["year"]) == ("Radiohead", "OK Computer", 1997)
+
+    # 1) art embedded in the files wins, no network
+    monkeypatch.setattr(folder_art, "embedded_art", lambda files: _real_jpeg("red"))
+    monkeypatch.setattr(folder_art, "_get", lambda *a, **k: (_ for _ in ()).throw(AssertionError("no net")))
+    r = client.post("/api/folder-art/fetch", json={"rel_dir": "0_ROCK/Radiohead/OK Computer (1997)"}).json()
+    assert r == {"image": "0_ROCK/Radiohead/OK Computer (1997)/cover.jpg", "source": "embedded in the files"}
+    assert client.get("/art/0_ROCK/Radiohead/OK Computer (1997)").headers["content-type"] == "image/jpeg"
+
+    # 2) else Deezer, exact artist + title only (bracketed tags ignored)
+    monkeypatch.setattr(folder_art, "embedded_art", lambda files: None)
+    def fake_get(url, timeout=15):
+        if "api.deezer.com" in url:
+            return json.dumps({"data": [
+                {"title": "We Shall Overcome (Live)", "artist": {"name": "Pete Seeger Tribute"}, "cover_xl": "https://d/wrong.jpg"},
+                {"title": "We Shall Overcome [Remastered]", "artist": {"name": "Pete Seeger"}, "cover_xl": "https://d/right.jpg"},
+            ]}).encode()
+        assert url == "https://d/right.jpg"
+        return _real_jpeg()
+    monkeypatch.setattr(folder_art, "_get", fake_get)
+    r = client.post("/api/folder-art/fetch", json={"rel_dir": "0_FOLK/Pete Seeger/We Shall Overcome (1963)"}).json()
+    assert r["source"] == "Deezer"
+
+    # 3) else iTunes, preferring the folder's year; 4) nothing → 404
+    monkeypatch.setattr(folder_art, "_itunes_last", 0.0)
+    monkeypatch.setattr(folder_art.time, "sleep", lambda s: None)
+    def fake_get2(url, timeout=15):
+        if "api.deezer.com" in url:
+            return b'{"data": []}'
+        if "itunes.apple.com" in url:
+            return json.dumps({"results": [
+                {"artistName": "yeule", "collectionName": "softscars", "releaseDate": "2024-01-01",
+                 "artworkUrl100": "https://i/2024/100x100bb.jpg"},
+                {"artistName": "yeule", "collectionName": "softscars", "releaseDate": "2023-09-22",
+                 "artworkUrl100": "https://i/2023/100x100bb.jpg"}]}).encode()
+        assert url == "https://i/2023/1000x1000bb.jpg"
+        return _real_jpeg()
+    monkeypatch.setattr(folder_art, "_get", fake_get2)
+    assert client.post("/api/folder-art/fetch", json={"rel_dir": "0_ELECTRONIC/yeule/softscars (2023)"}).json()["source"] == "iTunes"
+    assert client.post("/api/folder-art/fetch", json={"rel_dir": "0_POP/Charli XCX/how i'm feeling now (2020)"}).status_code == 404
+
+    left = {a["rel_dir"] for a in client.get("/api/folder-art").json()["albums_missing"]}
+    assert "0_ROCK/Radiohead/OK Computer (1997)" not in left and "0_POP/Charli XCX/how i'm feeling now (2020)" in left
