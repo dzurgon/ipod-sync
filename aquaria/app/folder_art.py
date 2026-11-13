@@ -167,6 +167,18 @@ def itunes_album(artist: str, album: str, year: int | None) -> str | None:
     return best["artworkUrl100"].replace("100x100bb", "1000x1000bb")
 
 
+def lookup_names(artist: str, album: str) -> tuple[str, str]:
+    """Artist + album as the online catalogues spell them, from how folders are named:
+    'Album_Artist' (KWUR rips; 'various.artists' → Various Artists), and album folders
+    that repeat the artist ('Black Sabbath - Technical Ecstasy')."""
+    if not artist and "_" in album:
+        album, artist = (x.strip() for x in album.rsplit("_", 1))
+        artist = artist.replace(".", " ") if norm_key(artist) == "various artists" else artist
+    if artist and album.lower().startswith(artist.lower() + " - "):
+        album = album[len(artist) + 3:].strip()
+    return artist, album
+
+
 def fetch_album(conn, music_root: Path, rel_dir: str) -> tuple[str, str] | None:
     """Find + save cover.jpg for an album folder: embedded art, else Deezer, else iTunes.
     Returns (image rel_path, where it came from) or None."""
@@ -177,10 +189,11 @@ def fetch_album(conn, music_root: Path, rel_dir: str) -> tuple[str, str] | None:
         raise FileNotFoundError(rel_dir)
     data, source = embedded_art([music_root / r["rel_path"] for r in rows]), "embedded in the files"
     t = rows[0]
-    if not data and t["artist"] and not t["artist_inferred"]:
-        url, source = deezer_album(t["artist"], t["album"]), "Deezer"
+    artist, album = lookup_names(t["artist"], t["album"])
+    if not data and artist and album and not t["artist_inferred"]:
+        url, source = deezer_album(artist, album), "Deezer"
         if not url:
-            url, source = itunes_album(t["artist"], t["album"], t["year"]), "iTunes"
+            url, source = itunes_album(artist, album, t["year"]), "iTunes"
         data = url and _get(url)
     if not data:
         return None

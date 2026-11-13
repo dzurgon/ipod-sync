@@ -298,3 +298,12 @@ def test_missing_album_covers_listed_and_fetched(client, monkeypatch):
 
     left = {a["rel_dir"] for a in client.get("/api/folder-art").json()["albums_missing"]}
     assert "0_ROCK/Radiohead/OK Computer (1997)" not in left and "0_POP/Charli XCX/how i'm feeling now (2020)" in left
+
+
+def test_album_lookup_names_from_folder_conventions():
+    from app.folder_art import lookup_names
+    assert lookup_names("", "Double Cup_DJ Rashad") == ("DJ Rashad", "Double Cup")
+    assert lookup_names("", "Techno Bass- The Mission_various.artists") == ("various artists", "Techno Bass- The Mission")
+    assert lookup_names("Black Sabbath", "Black Sabbath - Technical Ecstasy") == ("Black Sabbath", "Technical Ecstasy")
+    assert lookup_names("Beck", "Odelay") == ("Beck", "Odelay")
+    assert lookup_names("", "KWUR 90.3 FM Presents.. UNDERGROUND") == ("", "KWUR 90.3 FM Presents.. UNDERGROUND")
