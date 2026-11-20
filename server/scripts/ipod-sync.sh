@@ -304,7 +304,15 @@ fi   # legacy mode
 # ══════════════════════════════════════════════════════════════════════════════
 # 5. SCROBBLE
 # ══════════════════════════════════════════════════════════════════════════════
-section "Scrobbling .scrobbler.log → Last.fm"
+section "Scrobbling plays → Last.fm"
+
+# Rockbox 4 logs plays to .rockbox/playback.log (its Last.fm plugin only converts that to
+# .scrobbler.log when run by hand). Aquaria resolves the paths and scrobbles them to the
+# owner's account; a .scrobbler.log, if the plugin made one, is still handled below.
+if [[ "$MODE" == "aquaria" ]]; then
+  IPOD_TIMEZONE="${IPOD_TIMEZONE:-}" python3 "$AQUARIA_SYNC" plays --mount "$IPOD_MOUNT" --sig "$IPOD_SIG" \
+    2>&1 | tee -a "$LOGFILE"
+fi
 
 # Aquaria mode scrobbles to the iPod owner's own Last.fm account (if they connected
 # one and left scrobbling on); legacy mode uses LASTFM_USERNAME from config.env.
@@ -334,7 +342,7 @@ elif [[ -f "$IPOD_SCROBBLER_LOG" ]]; then
   else
     warn "scrobble.py not found or not executable at $SCROBBLE_SCRIPT — skipping."
   fi
-else
+elif [[ "$MODE" != "aquaria" ]]; then
   log "No .scrobbler.log found on iPod — nothing to scrobble."
 fi
 

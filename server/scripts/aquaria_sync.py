@@ -23,6 +23,10 @@ environment (ipod-sync.sh sources /etc/ipod-sync/aquaria.env). Subcommands:
                    DIR/playlists  the .m3u files this iPod should hold
                    DIR/pushed.json  names we pushed (copied to the iPod after a good push)
                    DIR/scrobble.env  Last.fm user + session for the owner (mode 600), if on
+  plays     --mount M --sig S         send Rockbox's .rockbox/playback.log to Aquaria, which
+                                      scrobbles it to the owner's Last.fm; sent lines move to
+                                      .rockbox/playback_scrobbled.log (IPOD_TIMEZONE = the
+                                      iPod clock's zone, e.g. America/Chicago)
   report    --sig S --status syncing|ok|warning|error|unmounting|safe [--message TEXT] [--stats JSON]
                                       ok/warning/error are results; syncing/unmounting/safe only
                                       update the live state shown on the My iPod page
@@ -312,6 +316,44 @@ def cmd_stage(a) -> int:
     return 0
 
 
+def _local_zone() -> str:
+    tz = os.environ.get("IPOD_TIMEZONE", "").strip()
+    if tz:
+        return tz
+    try:
+        return Path("/etc/timezone").read_text().strip() or "UTC"
+    except OSError:
+        return "UTC"
+
+
+def cmd_plays(a) -> int:
+    rb = Path(a.mount) / ".rockbox"
+    logs = sorted(rb.glob("playback_[0-9][0-9][0-9][0-9].log")) + [rb / "playback.log"]
+    logs = [f for f in logs if f.is_file()]
+    lines = [l for f in logs for l in f.read_text(encoding="utf-8", errors="replace").splitlines()]
+    if not lines:
+        has_logging = any(rb.glob("playback*.log"))
+        print("  No plays logged on the iPod." + ("" if has_logging else
+              " Turn on Rockbox's playback log: run Plugins → Applications → Last.fm Scrobbler"
+              " once and let it enable logging."))
+        return 0
+    try:
+        r = api("POST", sig_path(a.sig) + "/plays", {"lines": lines, "tz": _local_zone()})
+    except Unreachable as e:
+        print(f"  Scrobbling failed, plays kept for next sync: {e}", file=sys.stderr)
+        return 0
+    if r.get("off"):
+        print("  Scrobbling is off for this iPod (or its owner hasn't connected Last.fm); plays kept.")
+        return 0
+    with open(rb / "playback_scrobbled.log", "a", encoding="utf-8") as done:
+        done.write("".join(l + "\n" for l in lines))
+    for f in logs:
+        f.unlink()
+    print(f"  Scrobbled {r['scrobbled']} of {r['sent']} plays to Last.fm "
+          f"({r['skipped']} skipped or too short, {r['unknown']} not in the library).")
+    return 0
+
+
 def cmd_report(a) -> int:
     try:
         api("POST", sig_path(a.sig) + "/report",
@@ -326,6 +368,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[1])
     sub = ap.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("identify"); p.add_argument("--mount", required=True); p.add_argument("--devname", default="")
+    p = sub.add_parser("plays"); p.add_argument("--mount", required=True); p.add_argument("--sig", required=True)
     p = sub.add_parser("seen"); p.add_argument("--mount", required=True); p.add_argument("--sig", required=True)
     p = sub.add_parser("pull"); p.add_argument("--mount", required=True); p.add_argument("--sig", required=True)
     p = sub.add_parser("stage"); p.add_argument("--mount", required=True); p.add_argument("--sig", required=True)
@@ -337,7 +380,7 @@ def main() -> int:
     a = ap.parse_args()
     try:
         return {"identify": cmd_identify, "seen": cmd_seen, "pull": cmd_pull, "stage": cmd_stage,
-                "prune": cmd_prune, "report": cmd_report}[a.cmd](a)
+                "prune": cmd_prune, "plays": cmd_plays, "report": cmd_report}[a.cmd](a)
     except Unreachable as e:
         print(f"Aquaria error: {e}", file=sys.stderr)
         return 20

@@ -64,7 +64,7 @@ _TRACK_RE = re.compile(
     r"""^
         (?:(?P<disc>\d+)[-.])?          # optional "1-" disc prefix
         (?P<track>\d{1,3})              # track number
-        \s*[-.]?\s+                     # separator: " - ", ". ", " "
+        (?:\s*[-.]{1,2}\s*|\s+)          # separator: " - ", ". ", " ", ".-"
         (?P<title>.+)$                  # the rest is the title
     """,
     re.VERBOSE,

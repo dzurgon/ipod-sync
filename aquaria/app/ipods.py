@@ -8,6 +8,7 @@ The host's udev → ipod-sync.sh pipeline identifies a connected iPod by a stabl
     POST /api/host/ipods/<sig>/playlists  import a playlist created on the iPod
     GET  /api/host/ipods/<sig>/plan       what this iPod should hold
     POST /api/host/ipods/<sig>/report     sync outcome → status + the owner's activity feed
+    POST /api/host/ipods/<sig>/plays      Rockbox's playback.log → the owner's Last.fm
 
 Each linked iPod stores a sync profile (ipods.sync JSON + ipods.layout):
 
@@ -28,6 +29,8 @@ import hmac
 import json
 import re
 import time
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from typing import Literal
 
@@ -35,7 +38,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from . import config, folder_art, indexer, playlists, state
+from . import config, folder_art, indexer, playlists, state, tags
 from .indexer import IMAGE_EXTS
 from .accounts import require_user
 from .parser import parse_genre
@@ -422,6 +425,73 @@ def host_playlist_cover(sig: str, playlist_id: int):
     if not ip or playlist_id not in pushed_playlist_ids(ip, ip["user_id"]) or not f.is_file():
         raise HTTPException(404, "no cover")
     return FileResponse(f, media_type="image/jpeg")
+
+
+class Plays(BaseModel):
+    lines: list[str]          # playback.log: "<time>:<elapsed ms>:<length ms>:<path on the iPod>"
+    tz: str = "UTC"           # the iPod clock's zone (Rockbox logs local time without one)
+
+
+def _track_for_ipod_path(path: str):
+    """The library track an iPod path points at: the same path, or (flat layout, other
+    roots) the same Artist/Album/file at the end of a library path. No fuzzy guessing."""
+    rel = _ROCKBOX_VOLUME.sub("", path)
+    prefix = f"/{IPOD_MUSIC_DIR}/"
+    rel = rel[len(prefix):] if rel.startswith(prefix) else rel.lstrip("/")
+    q = "SELECT rel_path, artist, album, title, track_no FROM tracks WHERE "
+    row = state.conn.execute(q + "rel_path=?", (rel,)).fetchone()
+    tail = "/" + "/".join(rel.split("/")[-3:])
+    return row or state.conn.execute(q + "substr(rel_path, -length(?1)) = ?1 LIMIT 1", (tail,)).fetchone()
+
+
+@router.post("/api/host/ipods/{sig}/plays", dependencies=[Depends(require_host)])
+def host_plays(sig: str, body: Plays):
+    """Scrobble the plays Rockbox logged (it counts a play once it's been heard for half
+    the track or 4 minutes, like Last.fm). 502 = nothing was lost, send them again later."""
+    ip = _linked(sig)
+    if not ip:
+        raise HTTPException(404, "iPod not linked")
+    owner = state.conn.execute("SELECT lastfm_user, lastfm_session FROM users WHERE id=?",
+                               (ip["user_id"],)).fetchone()
+    if not ip["sync"]["scrobble"] or not owner["lastfm_session"]:
+        return {"scrobbled": 0, "off": True}
+    try:
+        zone = ZoneInfo(body.tz)
+    except (ZoneInfoNotFoundError, ValueError):
+        zone = ZoneInfo("UTC")
+    plays, counts = [], {"skipped": 0, "unknown": 0}
+    for line in body.lines:
+        parts = line.strip().split(":", 3)
+        if len(parts) != 4 or not all(x.isdigit() for x in parts[:3]):
+            continue                                    # comments, partial lines
+        when, elapsed, length, path = int(parts[0]), int(parts[1]), int(parts[2]), parts[3]
+        if length < 30_000 or elapsed < min(length / 2, 240_000) or when < 1_000_000_000:
+            counts["skipped"] += 1                      # too short / skipped / clock unset
+            continue
+        t = _track_for_ipod_path(path)
+        meta = t and tags.scrobble_meta(config.MUSIC_ROOT / t["rel_path"], dict(t))
+        if not meta or not meta["artist"]:
+            counts["unknown"] += 1
+            continue
+        # Rockbox's clock is local time stored as if it were UTC: reinterpret it in its zone.
+        utc = int(datetime.fromtimestamp(when, timezone.utc).replace(tzinfo=zone).timestamp())
+        plays.append(meta | {"duration": length // 1000, "timestamp": utc})
+    accepted = 0
+    from .accounts import lastfm_post
+    for i in range(0, len(plays), 50):                  # Last.fm takes 50 per call
+        batch = {f"{k}[{n}]": v for n, p in enumerate(plays[i:i + 50]) for k, v in p.items()}
+        try:
+            r = lastfm_post("track.scrobble", batch, owner["lastfm_session"])
+        except Exception as e:
+            raise HTTPException(502, f"Last.fm: {e}")
+        accepted += int(r.get("scrobbles", {}).get("@attr", {}).get("accepted", len(plays[i:i + 50])))
+    if plays:
+        with state.write_lock:
+            _activity(ip["user_id"], ip["id"], "scrobble",
+                      f"Scrobbled {accepted} play{'s' * (accepted != 1)} from {ip['name']} "
+                      f"to last.fm/user/{owner['lastfm_user']}")
+            state.conn.commit()
+    return {"scrobbled": accepted, "sent": len(plays), **counts}
 
 
 @router.post("/api/host/ipods/{sig}/report", dependencies=[Depends(require_host)])

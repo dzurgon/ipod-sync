@@ -34,6 +34,8 @@ def test_track_filename():
     assert parse_track_filename("02. sulky baby.flac") == (None, 2, "sulky baby")
     assert parse_track_filename("1-02 Paranoid Android.flac") == (1, 2, "Paranoid Android")
     assert parse_track_filename("Xtal.flac") == (None, None, "Xtal")
+    assert parse_track_filename("01.-Them Bones.flac") == (None, 1, "Them Bones")
+    assert parse_track_filename("13.-Would.flac") == (None, 13, "Would")
 
 
 def test_standard_layout():
@@ -86,3 +88,22 @@ def test_legacy_playlist_normalise():
 
 def test_non_audio_ignored():
     assert parse_rel_path("0_POP/Charli XCX/BRAT (2025)/cover.jpg") is None
+
+
+def test_scrobble_meta_prefers_file_tags(monkeypatch, tmp_path):
+    import mutagen
+    from app import tags
+    row = {"artist": "Alice in Chains", "title": "01.-Them Bones", "track_no": None,
+           "album": "Alice In Chains - Dirt (1992) (Dutch PBTHAL LP 24-96) [FLAC] vtwin88cube"}
+
+    class Tagged(dict):
+        tags = True
+    monkeypatch.setattr(mutagen, "File", lambda p, easy: Tagged(
+        artist=["Alice In Chains"], title=["Them Bones"], album=["Dirt"], tracknumber=["01/13"]))
+    assert tags.scrobble_meta(tmp_path / "x.flac", row) == {
+        "artist": "Alice In Chains", "track": "Them Bones", "album": "Dirt", "trackNumber": 1}
+
+    monkeypatch.setattr(mutagen, "File", lambda p, easy: None)            # untagged file
+    assert tags.scrobble_meta(tmp_path / "x.flac", row)["track"] == "01.-Them Bones"
+    monkeypatch.setattr(mutagen, "File", lambda p, easy: Tagged(album=["Dirt"]))  # no title tag
+    assert tags.scrobble_meta(tmp_path / "x.flac", row)["album"] == row["album"]

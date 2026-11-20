@@ -27,7 +27,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 
-from . import config, state
+from . import config, state, tags
 
 router = APIRouter()
 
@@ -263,11 +263,10 @@ def _web_play(user: dict, body: Play, method: str) -> dict:
                            (body.rel_path,)).fetchone()
     if not t:
         raise HTTPException(404, "track not in library")
-    if not t["artist"]:
+    meta = tags.scrobble_meta(config.MUSIC_ROOT / body.rel_path, dict(t))
+    if not meta["artist"]:
         return {"ok": False, "reason": "no artist"}
-    params = {"artist": t["artist"], "track": t["title"], "album": t["album"],
-              "trackNumber": t["track_no"],
-              "duration": round(body.duration) if body.duration and body.duration < 1e6 else None}
+    params = meta | {"duration": round(body.duration) if body.duration and body.duration < 1e6 else None}
     if method == "track.scrobble":
         params["timestamp"] = body.started or int(time.time())
     try:

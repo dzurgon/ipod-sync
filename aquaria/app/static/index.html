@@ -101,7 +101,7 @@ DAY_MQ.addEventListener("change", () => applyTheme());
   .form{display:grid;gap:12px;max-width:360px}
   .form label{font-size:13px;color:var(--ink-dim);display:grid;gap:4px}
   .opts{display:flex;flex-wrap:wrap;gap:6px 14px;font-size:13px}
-  .opts label{display:flex;align-items:center;gap:6px;color:var(--ink)}
+  .opts label,.opts .check{display:flex;align-items:center;gap:6px;color:var(--ink)}
   .sec-h{font-size:12px;letter-spacing:1.5px;text-transform:uppercase;color:var(--aqua-dim);margin:20px 0 8px}
   .pill{display:inline-block;font-size:11px;padding:1px 8px;border-radius:10px;border:1px solid var(--line);color:var(--ink-dim)}
   .pill.ok{border-color:var(--aqua);color:var(--aqua)}
@@ -330,6 +330,9 @@ function toast(msg, html=false){
   clearTimeout(toast.h); toast.h=setTimeout(()=>t.classList.remove("on"), html ? 4500 : 2200);
 }
 $("#toast").addEventListener("click", e=>{ if(e.target.closest("a")) $("#toast").classList.remove("on"); });
+
+// A Last.fm profile link, shown as its real address.
+const lfmLink = name => `<a href="https://www.last.fm/user/${encodeURIComponent(name)}" target="_blank" rel="noopener">last.fm/user/${esc(name)}</a>`;
 
 // A playlist's name, linking to its page.
 const plLink = (id, name) => `<a class="pl-link" data-link href="/playlist/${id}">${esc(name)}</a>`;
@@ -991,7 +994,7 @@ async function renderUser(name){
   const err = new URLSearchParams(location.search).get("lastfm_error");
   if(err) toast("Last.fm: " + err);
   const fm = u.lastfm_user
-    ? `🎧 Scrobbles to <a href="https://www.last.fm/user/${encodeURIComponent(u.lastfm_user)}" target="_blank" rel="noopener">last.fm/${esc(u.lastfm_user)}</a>
+    ? `🎧 Scrobbles to ${lfmLink(u.lastfm_user)}
        ${u.is_me ? `<button class="btn" id="fmOff">Disconnect</button>` : ""}`
     : u.is_me ? (LASTFM_OK ? `<a class="btn" href="/api/me/lastfm/connect">🎧 Connect Last.fm</a>
                  <span class="sub" style="margin:0">so your iPod plays scrobble to your account</span>`
@@ -1115,8 +1118,8 @@ async function renderIpods(){
           <label><input type="checkbox" name="own" ${s.own_playlists?'checked':''}> All my playlists (new ones included)</label></div>
           <div class="opts" style="margin-top:6px">${pick(MINE, true)}${pick(others, false)}</div></div>
         <div><b>Scrobbling</b><div class="opts">
-          <label><input type="checkbox" name="scrobble" ${s.scrobble?'checked':''} ${ME.lastfm_user?'':'disabled'}>
-          ${ME.lastfm_user ? `Scrobble plays to last.fm/${esc(ME.lastfm_user)}` : `Connect Last.fm on <a data-link href="/user/${encodeURIComponent(ME.username)}">your profile</a> to scrobble`}</label></div></div>
+          <span class="check"><input type="checkbox" name="scrobble" id="scrobble-${ip.id}" aria-label="Scrobble this iPod's plays" ${s.scrobble?'checked':''} ${ME.lastfm_user?'':'disabled'}>
+          ${ME.lastfm_user ? `Scrobble plays to ${lfmLink(ME.lastfm_user)}` : `Connect Last.fm on <a data-link href="/user/${encodeURIComponent(ME.username)}">your profile</a> to scrobble`}</span></div></div>
         <div class="bar" style="display:flex;gap:8px"><button class="btn primary">Save</button>
           <button class="btn danger" type="button" data-unlink>Unlink</button></div>
       </form>

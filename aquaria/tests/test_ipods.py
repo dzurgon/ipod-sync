@@ -206,3 +206,35 @@ def test_ipod_gets_small_baseline_artwork(client, tmp_path):
     assert client.get(f"/api/host/ipods/NOPE/art/0_POP/Charli XCX/BRAT (2025)/cover.jpg",
                       headers=H).status_code == 404
     assert len(list((tmp_path / "data/ipod-art").glob("*.jpg"))) == 2
+
+
+def test_rockbox_playback_log_is_scrobbled_to_the_owner(client, monkeypatch):
+    from app import accounts
+    seen(client); ip = link(client)
+    sent = []
+    monkeypatch.setattr(accounts, "lastfm_post", lambda m, p, sk: sent.append((m, p, sk)) or
+                        {"scrobbles": {"@attr": {"accepted": sum(k.startswith("artist[") for k in p)}}})
+    rel = client.get("/api/search?q=sulky").json()["tracks"][0]["rel_path"]   # yeule, sulky baby
+    when = 1_763_000_000                     # Rockbox clock: Chicago local time, stored as if UTC
+    lines = ["# comment",
+             f"{when}:200000:201000:/<HDD0>/FLAC/{rel}",         # heard in full
+             f"{when + 300}:20000:201000:/FLAC/{rel}",           # skipped after 20 s
+             f"{when + 600}:250000:600000:/FLAC/{rel}",          # 4+ min of a long track
+             f"{when + 900}:20000:25000:/FLAC/{rel}",            # under 30 s long
+             f"{when + 999}:200000:201000:/FLAC/0_X/Nobody/Nothing/01 x.flac",
+             "garbage"]
+    body = {"lines": lines, "tz": "America/Chicago"}
+
+    assert client.post(f"/api/host/ipods/{SIG}/plays", headers=H, json=body).json()["off"]  # no Last.fm yet
+    monkeypatch.setattr(accounts, "lastfm_get_session", lambda token: ("blgondzur", "sk-1"))
+    client.get("/lastfm/callback?token=t", follow_redirects=False)
+    r = client.post(f"/api/host/ipods/{SIG}/plays", headers=H, json=body).json()
+    assert r == {"scrobbled": 2, "sent": 2, "skipped": 2, "unknown": 1}
+    (method, p, sk), = sent
+    assert (method, sk, p["artist[0]"], p["track[0]"]) == ("track.scrobble", "sk-1", "yeule", "sulky baby")
+    assert p["timestamp[0]"] == when + 6 * 3600                 # CST is UTC-6 in November
+    act = client.get("/api/activity").json()["activity"][0]["message"]
+    assert act == "Scrobbled 2 plays from Ben's iPod to last.fm/user/blgondzur"
+
+    client.patch(f"/api/ipods/{ip['id']}", json={"sync": {"scrobble": False}})
+    assert client.post(f"/api/host/ipods/{SIG}/plays", headers=H, json=body).json()["off"]
