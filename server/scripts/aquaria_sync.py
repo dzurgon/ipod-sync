@@ -15,6 +15,9 @@ environment (ipod-sync.sh sources /etc/ipod-sync/aquaria.env). Subcommands:
                                       · 20 Aquaria unreachable / host API disabled
   pull      --mount M --sig S         import playlists created on the iPod (.m3u/.m3u8, not ones
                                       we pushed); each original is kept as <name>.imported
+  relocate  --stage DIR --dest DIR    before the music rsync: files that only moved or were
+                                      renamed on the server (same size + mtime) are renamed on
+                                      the iPod instead of deleted and copied again
   prune     --mount M --pushed FILE   delete playlists we pushed before that left the plan,
                                       and covers (<name>.jpg) we no longer push
                                       (never touches playlists made on the iPod)
@@ -204,6 +207,64 @@ def cmd_pull(a) -> int:
     return 0
 
 
+def _tree(root: Path, follow: bool) -> dict[str, tuple[int, float]]:
+    """rel path -> (size, mtime) for every file under root."""
+    out = {}
+    for d, _, files in os.walk(root, followlinks=follow):
+        for f in files:
+            p = Path(d) / f
+            try:
+                st = p.stat()
+            except OSError:
+                continue
+            out[p.relative_to(root).as_posix()] = (st.st_size, st.st_mtime)
+    return out
+
+
+def cmd_relocate(a) -> int:
+    """Rename files already on the iPod whose server copy moved, so rsync doesn't delete
+    and recopy them. rsync keeps mtimes, so a moved file has the same size and mtime (to
+    FAT's 2 s) at its new path. Only unambiguous matches move; nothing is overwritten."""
+    stage, dest = Path(a.stage), Path(a.dest)
+    if not dest.is_dir():
+        return 0
+    want, have = _tree(stage, follow=True), _tree(dest, follow=False)
+    have_ci = {k.casefold() for k in have}                     # FAT ignores case
+    missing = [k for k in sorted(want) if k.casefold() not in have_ci]
+    spare: dict[int, list[str]] = {}
+    for k in have:
+        if k not in want:
+            spare.setdefault(have[k][0], []).append(k)
+    moved = 0
+    for k in missing:
+        size, mtime = want[k]
+        cands = [c for c in spare.get(size, []) if abs(have[c][1] - mtime) <= 2]
+        if len(cands) > 1:                                     # same size+time: prefer same name
+            cands = [c for c in cands if c.rsplit("/", 1)[-1] == k.rsplit("/", 1)[-1]]
+        if len(cands) != 1:
+            continue
+        src, dst = dest / cands[0], dest / k
+        if dst.exists():
+            continue
+        try:
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            src.rename(dst)
+        except OSError as e:
+            print(f"  couldn't move {cands[0]}: {e}", file=sys.stderr)
+            continue
+        spare[size].remove(cands[0])
+        moved += 1
+    for d, _, _ in sorted(os.walk(dest), key=lambda t: -len(t[0])):   # tidy emptied folders
+        if Path(d) != dest:
+            try:
+                Path(d).rmdir()
+            except OSError:
+                pass
+    if moved:
+        print(f"  Moved {moved} file(s) on the iPod to match renames on the server (no recopy).")
+    return 0
+
+
 def cmd_prune(a) -> int:
     """Remove playlists *we* pushed last time that aren't in this push. Anything else in
     the folder (made on the iPod, or by another tool) is never touched."""
@@ -368,6 +429,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[1])
     sub = ap.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("identify"); p.add_argument("--mount", required=True); p.add_argument("--devname", default="")
+    p = sub.add_parser("relocate"); p.add_argument("--stage", required=True); p.add_argument("--dest", required=True)
     p = sub.add_parser("plays"); p.add_argument("--mount", required=True); p.add_argument("--sig", required=True)
     p = sub.add_parser("seen"); p.add_argument("--mount", required=True); p.add_argument("--sig", required=True)
     p = sub.add_parser("pull"); p.add_argument("--mount", required=True); p.add_argument("--sig", required=True)
@@ -380,7 +442,7 @@ def main() -> int:
     a = ap.parse_args()
     try:
         return {"identify": cmd_identify, "seen": cmd_seen, "pull": cmd_pull, "stage": cmd_stage,
-                "prune": cmd_prune, "plays": cmd_plays, "report": cmd_report}[a.cmd](a)
+                "prune": cmd_prune, "relocate": cmd_relocate, "plays": cmd_plays, "report": cmd_report}[a.cmd](a)
     except Unreachable as e:
         print(f"Aquaria error: {e}", file=sys.stderr)
         return 20

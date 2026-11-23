@@ -178,6 +178,9 @@ if [[ "$MODE" == "aquaria" ]]; then
 
   log "Source:      $STAGE/music (-> $MUSIC_DIR)"
   log "Destination: $IPOD_MUSIC_DIR"
+  # Albums renamed or reorganised on the server: rename them on the iPod first, so rsync
+  # doesn't delete and recopy them (or trip IPOD_MAX_DELETE on a big reshuffle).
+  python3 "$AQUARIA_SYNC" relocate --stage "$STAGE/music" --dest "$IPOD_MUSIC_DIR" 2>&1 | tee -a "$LOGFILE"
   # --copy-links: send what the symlinks point at (whole album folders / artwork files)
   rsync \
     --recursive \
