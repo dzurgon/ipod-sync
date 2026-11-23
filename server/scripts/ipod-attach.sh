@@ -9,6 +9,9 @@
 #
 #   ipod-attach.sh attach /dev/sdX2   iPod's FAT partition appeared: mount → sync → unmount
 #   ipod-attach.sh detach /dev/sdX2   it disappeared: lazily drop any mount still pointing at it
+#
+# While an iPod is plugged in, /run/ipod-sync/<sdXN>.sig holds its signature: Aquaria's
+# "Sync now" finds the device through it, and unplugging tells Aquaria it's gone.
 
 set -uo pipefail
 
@@ -16,6 +19,7 @@ ACTION="${1:-}"
 DEV="${2:-}"
 CONFIG_FILE="/etc/ipod-sync/config.env"
 LIB="/usr/local/lib/ipod-sync"
+RUN_DIR="/run/ipod-sync"
 
 cfg() { sed -n "s/^$1=//p" "$CONFIG_FILE" 2>/dev/null | tr -d '"'\''' | head -n1; }
 SYNC_USER="$(cfg SYNC_USER)"; SYNC_USER="${SYNC_USER:-jimin}"
@@ -53,6 +57,11 @@ clear_stale() {
 
 case "$ACTION" in
   detach)
+    SIGFILE="$RUN_DIR/$(basename "$DEV").sig"
+    if [[ -f "$SIGFILE" ]]; then
+      IPOD_SIG="$(cat "$SIGFILE")"; rm -f "$SIGFILE"
+      aq_report --status removed                 # Aquaria: no longer live
+    fi
     while read -r mp; do
       [[ -n "$mp" ]] && umount -l "$mp" && log "iPod $DEV removed — dropped its mount at $mp"
     done < <(findmnt -n -o TARGET --source "$DEV" 2>/dev/null)
@@ -113,6 +122,9 @@ runuser -u "$SYNC_USER" -- env \
 rc=$?
 IPOD_LOGFILE="$(sed -n 's/^IPOD_LOGFILE=//p' "$STATE")"
 IPOD_SIG="$(sed -n 's/^IPOD_SIG=//p' "$STATE")"
+if [[ -n "$IPOD_SIG" ]]; then
+  mkdir -p "$RUN_DIR" && echo "$IPOD_SIG" > "$RUN_DIR/$(basename "$DEV").sig"
+fi
 
 aq_report --status unmounting
 note "writing the last changes to the iPod — don't unplug yet"

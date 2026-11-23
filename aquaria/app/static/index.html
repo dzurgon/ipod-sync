@@ -108,6 +108,11 @@ DAY_MQ.addEventListener("change", () => applyTheme());
   .pill.err{border-color:var(--err);color:var(--err-ink)}
   .pill.sync{border-color:var(--warn);color:var(--warn-ink);animation:pulse 1.6s ease-in-out infinite}
   @keyframes pulse{50%{opacity:.55}}
+  .live{display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:700;letter-spacing:.6px;
+        color:#ff4d5e;vertical-align:middle;margin-left:8px;text-transform:uppercase}
+  .live::before{content:"";width:8px;height:8px;border-radius:50%;background:#ff4d5e;
+                box-shadow:0 0 0 0 rgba(255,77,94,.6);animation:live 1.8s ease-out infinite}
+  @keyframes live{70%{box-shadow:0 0 0 7px rgba(255,77,94,0)}100%{box-shadow:0 0 0 0 rgba(255,77,94,0)}}
   .avatar{width:96px;height:96px;border-radius:50%;background:var(--thumb-bg);
           border:1px solid var(--line);display:flex;align-items:center;justify-content:center;font-size:40px;font-weight:700;flex-shrink:0}
   .settings{display:grid;gap:14px;margin-top:12px}
@@ -1049,20 +1054,26 @@ function ipodStatus(ip){
   const st = ip.host?.state, now = Date.now()/1000;
   // A sync can outlast the 15-min "connected" window; 12 h covers a full first copy.
   const syncing = st === "syncing" && now - (ip.host.sync_started||0) < 43200;
-  const live = syncing ? `<span class="pill sync">⟳ Sync in progress · started ${ago(ip.host.sync_started)}</span><br>`
+  const asked = st === "requested" && now - (ip.host.requested_at||0);
+  const busy = syncing || st === "unmounting" || (asked !== false && asked < 60);
+  const btn = ip.live ? `<button class="btn" data-sync-now="${ip.id}" ${busy?'disabled':''} style="margin-bottom:6px">⟳ Sync now</button><br>` : "";
+  const live = btn + (asked !== false
+    ? (asked < 60 ? `<span class="pill sync">⏳ Sync requested — starting…</span><br>`
+                  : `<span class="pill err">The server didn't start the sync — run install-host.sh?</span><br>`)
+    : syncing ? `<span class="pill sync">⟳ Sync in progress · started ${ago(ip.host.sync_started)}</span><br>`
     : st === "unmounting" && now - (ip.last_seen||0) < 3600
     ? `<span class="pill sync">⏳ Finishing writes — don't unplug yet</span><br>`
-    : st === "safe" && now - (ip.last_seen||0) < 900
+    : st === "safe" && ip.live
     ? `<span class="pill ok">✓ Synced · safe to unplug</span><br>`
-    : st && now - (ip.last_seen||0) < 900
+    : ip.live
     ? `<span class="pill ok">● connected${{ok:" · synced", warning:" · synced with warnings", error:" · sync failed"}[st]||""}</span><br>`
-    : "";
+    : "");
   return `${live}<span class="sub" style="margin:0;font-size:12px">Last sync ${ago(ip.last_sync)}</span> ${statusPill(ip.last_status)}`;
 }
 
 // While the My iPod page is open, refresh just the status corners (forms stay untouched).
 let IPOD_POLL = 0;             // newest poll loop's token; older loops stop themselves
-function pollIpodStatus(nav, me = ++IPOD_POLL){
+function pollIpodStatus(nav, me = ++IPOD_POLL, wait){
   setTimeout(async ()=>{
     if(nav !== NAV || me !== IPOD_POLL) return;
     try {
@@ -1071,10 +1082,12 @@ function pollIpodStatus(nav, me = ++IPOD_POLL){
       for(const ip of data.ipods){
         const el = document.querySelector(`[data-ipod="${ip.id}"] [data-status]`);
         if(el) el.innerHTML = ipodStatus(ip);
+        const dot = document.querySelector(`[data-ipod="${ip.id}"] [data-live]`);
+        if(dot) dot.hidden = !ip.live;
       }
     } catch(e){}
     pollIpodStatus(nav, me);
-  }, 10000);
+  }, wait ?? (document.querySelector(".pill.sync") ? 3000 : 10000));   // quicker while a sync is moving
 }
 
 async function renderIpods(){
@@ -1100,7 +1113,7 @@ async function renderIpods(){
         ${plLink(p.id, p.name)}${p.is_mine ? lock(p) : ` <small class="sub">by ${esc(p.owner)}</small>`}</label>`).join("");
     return `<div class="card" data-ipod="${ip.id}">
       <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap">
-        <div><h3>📟 ${esc(ip.name)}</h3>
+        <div><h3>📟 ${esc(ip.name)}<span class="live" data-live title="Plugged into the server" ${ip.live?'':'hidden'}>Live</span></h3>
           <div class="sub" style="margin:0">${meta(ip.metadata) || "Unknown model"}</div></div>
         <div style="text-align:right" data-status>${ipodStatus(ip)}</div>
       </div>
@@ -1164,6 +1177,13 @@ async function renderIpods(){
   });
   pollIpodStatus(nav);
 }
+document.addEventListener("click", async e=>{
+  const b = e.target.closest("[data-sync-now]"); if(!b) return;
+  b.disabled = true;
+  try { await post(`/api/ipods/${b.dataset.syncNow}/sync`); toast("Sync requested"); }
+  catch(err){ toast(err.message); b.disabled = false; }
+  pollIpodStatus(NAV, undefined, 0);             // refresh the status right away
+});
 
 // ── Activity: the logged-in user's iPod + playlist history ──────────────────
 // Activity text, with the playlist it mentions (“Name”) linked when the entry records one.

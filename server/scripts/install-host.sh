@@ -18,7 +18,7 @@ SYNC_USER="${SYNC_USER:-${SUDO_USER:-jimin}}"
 AQUARIA_DIR="${AQUARIA_DIR:-$(getent passwd "$SYNC_USER" | cut -d: -f6)/docker/aquaria}"
 
 install -d -m 755 "$LIB" "$LIB/lib"
-install -m 755 "$REPO"/server/scripts/{ipod-sync.sh,ipod-attach.sh,udev-trigger.sh,ipod-event.sh,scrobble.py,aquaria_sync.py} "$LIB/"
+install -m 755 "$REPO"/server/scripts/{ipod-sync.sh,ipod-attach.sh,udev-trigger.sh,ipod-event.sh,scrobble.py,aquaria_sync.py,sync-request.sh} "$LIB/"
 install -m 755 "$REPO/server/scripts/lib/common.sh" "$LIB/lib/"
 install -m 644 "$REPO/server/udev/99-ipod-rockbox.rules" /etc/udev/rules.d/99-ipod-rockbox.rules
 echo "Installed scripts → $LIB, udev rule → /etc/udev/rules.d/99-ipod-rockbox.rules"
@@ -33,6 +33,17 @@ if [[ -n "$TOKEN" ]]; then
 else
   echo "No AQUARIA_HOST_TOKEN in $AQUARIA_DIR/.env — iPods will use the legacy full-library sync."
 fi
+
+# Aquaria's "Sync now": the container writes requests into its data volume; a path unit
+# here starts the sync for the plugged-in iPod.
+REQ_DIR="$AQUARIA_DIR/data/sync-requests"
+install -d -m 755 -o "$SYNC_USER" -g "$SYNC_USER" "$REQ_DIR"
+for u in aquaria-sync-request.path aquaria-sync-request.service; do
+  sed "s|@REQ_DIR@|$REQ_DIR|g" "$REPO/server/systemd/$u" > "/etc/systemd/system/$u"
+done
+systemctl daemon-reload
+systemctl enable --now aquaria-sync-request.path >/dev/null
+echo "Sync now: watching $REQ_DIR (aquaria-sync-request.path)"
 
 udevadm control --reload-rules
 echo "udev rules reloaded. Sync runs as: $SYNC_USER"

@@ -212,12 +212,10 @@ def _my_ipod(ipod_id: int, user: dict) -> dict:
 def my_ipods(user: dict = Depends(require_user)):
     mine = [_profile(r) for r in state.conn.execute(
         "SELECT * FROM ipods WHERE user_id=? ORDER BY name", (user["id"],))]
-    sightings = [(r["signature"], json.loads(r["metadata"])) for r in state.conn.execute(
-        "SELECT signature, metadata FROM ipod_sightings ORDER BY last_seen DESC")]
     for ip in mine:
         # Live state comes from this iPod's latest sighting, under whichever signature.
-        ip["host"] = next((m for sig, m in sightings
-                           if sig == ip["signature"] or same_device(m, ip["metadata"])), {})
+        ip["host"] = _latest_sighting(ip)[1]
+        ip["live"] = ip["host"].get("state") in LIVE_STATES
         ip["summary"] = build_plan(ip, user["id"])["summary"]
     month = time.time() - 30 * 86400
     unclaimed = [dict(r) | {"metadata": json.loads(r["metadata"])} for r in state.conn.execute(
@@ -227,6 +225,39 @@ def my_ipods(user: dict = Depends(require_user)):
     unclaimed = [u for u in unclaimed if not _twin(u["signature"], u["metadata"])]
     genres = [dict(r) for r in state.conn.execute("SELECT rel_dir, genre FROM genre_folders ORDER BY rel_dir")]
     return {"ipods": mine, "unclaimed": unclaimed, "genres": genres}
+
+
+# Sighting states that mean "plugged into the server right now". After a sync the iPod is
+# unmounted ("safe") but still attached; unplugging reports "removed".
+LIVE_STATES = {"connected", "requested", "syncing", "unmounting", "safe", "ok", "warning", "error"}
+
+
+def _latest_sighting(ip: dict) -> tuple[str | None, dict]:
+    for r in state.conn.execute("SELECT signature, metadata FROM ipod_sightings ORDER BY last_seen DESC"):
+        m = json.loads(r["metadata"])
+        if r["signature"] == ip["signature"] or same_device(m, ip["metadata"]):
+            return r["signature"], m
+    return None, {}
+
+
+@router.post("/api/ipods/{ipod_id}/sync")
+def sync_now(ipod_id: int, user: dict = Depends(require_user)):
+    """Ask the server to sync this iPod now (it must be plugged in)."""
+    ip = _my_ipod(ipod_id, user)
+    sig, host = _latest_sighting(ip)
+    st = host.get("state")
+    if st not in LIVE_STATES:
+        raise HTTPException(409, f"{ip['name']} isn't plugged into the server")
+    if st in ("syncing", "unmounting"):
+        raise HTTPException(409, "a sync is already running")
+    config.SYNC_REQUEST_DIR.mkdir(parents=True, exist_ok=True)
+    (config.SYNC_REQUEST_DIR / re.sub(r"[^A-Za-z0-9._-]", "_", sig)).write_text(f"{time.time()}\n")
+    with state.write_lock:
+        state.conn.execute("UPDATE ipod_sightings SET metadata=? WHERE signature=?",
+                           (json.dumps(host | {"state": "requested", "requested_at": time.time()}), sig))
+        _activity(user["id"], ip["id"], "sync", f"Sync of {ip['name']} requested from Aquaria")
+        state.conn.commit()
+    return {"ok": True}
 
 
 @router.post("/api/ipods")
@@ -335,8 +366,9 @@ class PulledPlaylist(BaseModel):
 
 
 class Report(BaseModel):
-    # ok | warning | error = a sync's result. syncing → unmounting → safe = live state only.
-    status: Literal["syncing", "ok", "warning", "error", "unmounting", "safe"]
+    # ok | warning | error = a sync's result. syncing → unmounting → safe = live state only;
+    # removed = unplugged (no longer live).
+    status: Literal["syncing", "ok", "warning", "error", "unmounting", "safe", "removed"]
     message: str = ""
     stats: dict = {}
 
@@ -507,7 +539,7 @@ def host_report(sig: str, body: Report):
                                (json.dumps(meta), now, sig))
         if ip and body.status == "syncing":
             _activity(ip["user_id"], ip["id"], "sync", f"Sync of {ip['name']} started")
-        elif ip and body.status in ("unmounting", "safe"):
+        elif ip and body.status in ("unmounting", "safe", "removed"):
             pass                                  # live state only; the result is already in
         elif ip:
             state.conn.execute("UPDATE ipods SET last_sync=?, last_status=? WHERE id=?",

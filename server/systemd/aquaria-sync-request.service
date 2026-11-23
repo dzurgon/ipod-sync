@@ -1,0 +1,6 @@
+[Unit]
+Description=Start iPod syncs requested from Aquaria
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/lib/ipod-sync/sync-request.sh @REQ_DIR@

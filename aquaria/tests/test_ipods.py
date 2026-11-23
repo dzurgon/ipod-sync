@@ -238,3 +238,25 @@ def test_rockbox_playback_log_is_scrobbled_to_the_owner(client, monkeypatch):
 
     client.patch(f"/api/ipods/{ip['id']}", json={"sync": {"scrobble": False}})
     assert client.post(f"/api/host/ipods/{SIG}/plays", headers=H, json=body).json()["off"]
+
+
+def test_live_flag_and_sync_now_request(client, tmp_path):
+    seen(client); ip = link(client)
+    mine = lambda: client.get("/api/ipods").json()["ipods"][0]
+    report = lambda st: client.post(f"/api/host/ipods/{SIG}/report", headers=H, json={"status": st})
+    req = tmp_path / "data/sync-requests" / SIG
+
+    assert mine()["live"] is True                                   # just seen = plugged in
+    report("syncing")
+    assert client.post(f"/api/ipods/{ip['id']}/sync").status_code == 409    # already syncing
+    report("safe")
+    assert mine()["live"] is True                                   # unmounted, still attached
+    assert client.post(f"/api/ipods/{ip['id']}/sync").json() == {"ok": True}
+    assert req.is_file() and mine()["host"]["state"] == "requested"
+    req.unlink()
+
+    report("removed")
+    assert mine()["live"] is False
+    r = client.post(f"/api/ipods/{ip['id']}/sync")
+    assert r.status_code == 409 and "isn't plugged" in r.json()["detail"] and not req.exists()
+    assert mine()["last_sync"] is None                              # state-only, not a result

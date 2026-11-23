@@ -30,9 +30,9 @@ environment (ipod-sync.sh sources /etc/ipod-sync/aquaria.env). Subcommands:
                                       scrobbles it to the owner's Last.fm; sent lines move to
                                       .rockbox/playback_scrobbled.log (IPOD_TIMEZONE = the
                                       iPod clock's zone, e.g. America/Chicago)
-  report    --sig S --status syncing|ok|warning|error|unmounting|safe [--message TEXT] [--stats JSON]
-                                      ok/warning/error are results; syncing/unmounting/safe only
-                                      update the live state shown on the My iPod page
+  report    --sig S --status syncing|ok|warning|error|unmounting|safe|removed [--message TEXT] [--stats JSON]
+                                      ok/warning/error are results; syncing/unmounting/safe/removed
+                                      only update the live state shown on the My iPod page
 """
 
 from __future__ import annotations
@@ -437,7 +437,7 @@ def main() -> int:
     p.add_argument("--music-root", required=True); p.add_argument("--out", required=True)
     p = sub.add_parser("prune"); p.add_argument("--mount", required=True); p.add_argument("--pushed", required=True)
     p = sub.add_parser("report"); p.add_argument("--sig", required=True)
-    p.add_argument("--status", required=True, choices=["syncing", "ok", "warning", "error", "unmounting", "safe"])
+    p.add_argument("--status", required=True, choices=["syncing", "ok", "warning", "error", "unmounting", "safe", "removed"])
     p.add_argument("--message", default=""); p.add_argument("--stats", default="")
     a = ap.parse_args()
     try:

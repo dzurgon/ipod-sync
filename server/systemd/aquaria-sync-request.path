@@ -1,0 +1,10 @@
+# Aquaria's "Sync now" button drops a file in @REQ_DIR@; run it. Installed by install-host.sh.
+[Unit]
+Description=Aquaria "Sync now" requests
+
+[Path]
+DirectoryNotEmpty=@REQ_DIR@
+Unit=aquaria-sync-request.service
+
+[Install]
+WantedBy=multi-user.target

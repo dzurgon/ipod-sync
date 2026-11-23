@@ -17,6 +17,9 @@ CACHE_MAX_BYTES = int(float(os.environ.get("AQUARIA_CACHE_GB", "2")) * 1e9)
 # Rockbox can't decode progressive JPEGs and crawls through multi-megapixel ones.
 IPOD_ART_DIR = Path(os.environ.get("AQUARIA_IPOD_ART", DB_PATH.parent / "ipod-art"))
 IPOD_ART_PX = int(os.environ.get("AQUARIA_IPOD_ART_PX", "320"))
+# "Sync now" requests: Aquaria writes <iPod signature> here; the host's
+# aquaria-sync-request.path unit (install-host.sh) watches this folder and starts the sync.
+SYNC_REQUEST_DIR = Path(os.environ.get("AQUARIA_SYNC_REQUESTS", DB_PATH.parent / "sync-requests"))
 # Playlist cover images, <playlist id>.jpg.
 COVERS_DIR = Path(os.environ.get("AQUARIA_COVERS", DB_PATH.parent / "playlist-covers"))
 
