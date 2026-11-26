@@ -27,7 +27,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 
-from . import config, state, tags
+from . import config, plays, state, tags
 
 router = APIRouter()
 
@@ -253,12 +253,13 @@ class Play(BaseModel):
     rel_path: str
     started: int | None = None        # unix time playback began (scrobbles only)
     duration: float | None = None     # seconds, when the browser knows it
+    heard: float | None = None        # seconds actually played (scrobbles only)
+    tz: str | None = None             # the browser's time zone, for the play's local date
 
 
 def _web_play(user: dict, body: Play, method: str) -> dict:
-    row = state.conn.execute("SELECT lastfm_session FROM users WHERE id=?", (user["id"],)).fetchone()
-    if not row or not row["lastfm_session"]:
-        return {"ok": False, "reason": "not connected"}
+    """Now playing / a finished play from the web player. A finished play is always recorded
+    (and goes to nucOS for its user); Last.fm only hears about it when connected."""
     t = state.conn.execute("SELECT artist, album, title, track_no FROM tracks WHERE rel_path=?",
                            (body.rel_path,)).fetchone()
     if not t:
@@ -266,9 +267,22 @@ def _web_play(user: dict, body: Play, method: str) -> dict:
     meta = tags.scrobble_meta(config.MUSIC_ROOT / body.rel_path, dict(t))
     if not meta["artist"]:
         return {"ok": False, "reason": "no artist"}
-    params = meta | {"duration": round(body.duration) if body.duration and body.duration < 1e6 else None}
+    duration = round(body.duration) if body.duration and body.duration < 1e6 else None
+    started = min(body.started or int(time.time()), int(time.time()))       # never in the future
     if method == "track.scrobble":
-        params["timestamp"] = body.started or int(time.time())
+        with state.write_lock:
+            plays.record(state.conn, user["id"], device="web", ts=started,
+                         seconds=int(body.heard or duration or 0), artist=meta["artist"],
+                         title=meta["track"], album=meta["album"] or "", tz=plays.zone(body.tz))
+            state.conn.commit()
+        from . import ipods
+        ipods._nucos_wake()
+    row = state.conn.execute("SELECT lastfm_session FROM users WHERE id=?", (user["id"],)).fetchone()
+    if not row or not row["lastfm_session"]:
+        return {"ok": False, "reason": "not connected", "recorded": method == "track.scrobble"}
+    params = meta | {"duration": duration}
+    if method == "track.scrobble":
+        params["timestamp"] = started
     try:
         lastfm_post(method, params, row["lastfm_session"])
     except Exception as e:

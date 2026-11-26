@@ -42,6 +42,26 @@ HOST_TOKEN = os.environ.get("AQUARIA_HOST_TOKEN", "")
 LASTFM_API_KEY = os.environ.get("LASTFM_API_KEY", "")
 LASTFM_API_SECRET = os.environ.get("LASTFM_API_SECRET", "")
 
+# nucOS (homelab habit tracker): plays of NUCOS_USER are pushed as `listen` items to the
+# habit its token was made for (Marketplace → Listening pack → Connect). Read at call time
+# so a restart isn't the only way to pick them up; the token is never logged.
+def nucos_url() -> str:
+    return os.environ.get("NUCOS_URL", "").strip().rstrip("/")
+
+
+def nucos_token() -> str:
+    return os.environ.get("NUCOS_TOKEN", "").strip()
+
+
+def nucos_configured() -> bool:
+    return bool(nucos_url() and nucos_token())
+
+
+NUCOS_TIMEOUT = 5.0
+NUCOS_USER = os.environ.get("NUCOS_USER", "") or os.environ.get("AQUARIA_DEFAULT_USER", "jimin")
+# Zone for plays whose source has no zone of its own (a Last.fm backfill).
+LOCAL_TZ = os.environ.get("TZ", "") or "UTC"
+
 # Owner for playlists imported from PLAYLIST_DIR / created before per-user login exists.
 DEFAULT_USER = os.environ.get("AQUARIA_DEFAULT_USER", "jimin")
 

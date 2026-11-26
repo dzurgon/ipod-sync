@@ -43,6 +43,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -387,31 +388,57 @@ def _local_zone() -> str:
         return "UTC"
 
 
+HISTORY_DAYS = 90       # iPod plays already scrobbled, re-sent each sync so Aquaria/nucOS have them
+
+
 def cmd_plays(a) -> int:
-    rb = Path(a.mount) / ".rockbox"
+    """New plays (playback.log, and .scrobbler.log if Rockbox's plugin made one) go to Aquaria,
+    which records them (nucOS) and scrobbles them; afterwards they're kept on the iPod in
+    .rockbox/playback_scrobbled.log. Recent history from that file is sent along every sync:
+    Aquaria's ids are stable, so it only fills in what Aquaria hasn't seen."""
+    root, rb = Path(a.mount), Path(a.mount) / ".rockbox"
     logs = sorted(rb.glob("playback_[0-9][0-9][0-9][0-9].log")) + [rb / "playback.log"]
     logs = [f for f in logs if f.is_file()]
     lines = [l for f in logs for l in f.read_text(encoding="utf-8", errors="replace").splitlines()]
-    if not lines:
+    sl = root / ".scrobbler.log"
+    scrobbler = sl.read_text(encoding="utf-8", errors="replace").splitlines() if sl.is_file() else []
+    done_log = rb / "playback_scrobbled.log"
+    cutoff = time.time() - HISTORY_DAYS * 86400 - 86400
+    history = [l for l in (done_log.read_text(encoding="utf-8", errors="replace").splitlines()
+                           if done_log.is_file() else [])
+               if l.split(":", 1)[0].isdigit() and int(l.split(":", 1)[0]) >= cutoff]
+    if not lines and not any(l and not l.startswith("#") for l in scrobbler):
         has_logging = any(rb.glob("playback*.log"))
-        print("  No plays logged on the iPod." + ("" if has_logging else
+        print("  No new plays on the iPod." + ("" if has_logging else
               " Turn on Rockbox's playback log: run Plugins → Applications → Last.fm Scrobbler"
               " once and let it enable logging."))
-        return 0
+        if not history:
+            return 0
     try:
-        r = api("POST", sig_path(a.sig) + "/plays", {"lines": lines, "tz": _local_zone()})
+        r = api("POST", sig_path(a.sig) + "/plays",
+                {"lines": lines, "scrobbler": scrobbler, "history": history, "tz": _local_zone()})
     except Unreachable as e:
-        print(f"  Scrobbling failed, plays kept for next sync: {e}", file=sys.stderr)
+        print(f"  Recording plays failed, kept on the iPod for next sync: {e}", file=sys.stderr)
         return 0
+    if r.get("clock_skew"):
+        print(f"  WARN: the iPod's clock is about {r['clock_skew'] / 3600:g} h fast — plays were "
+              "shifted back. Fix it on the iPod: Settings → Time & Date.")
     if r.get("off"):
-        print("  Scrobbling is off for this iPod (or its owner hasn't connected Last.fm); plays kept.")
+        print(f"  Recorded {r['recorded']} new play(s); scrobbling is off for this iPod (or its owner "
+              "hasn't connected Last.fm), so new plays stay on the iPod.")
         return 0
-    with open(rb / "playback_scrobbled.log", "a", encoding="utf-8") as done:
-        done.write("".join(l + "\n" for l in lines))
-    for f in logs:
-        f.unlink()
+    if lines:
+        with open(done_log, "a", encoding="utf-8") as done:
+            done.write("".join(l + "\n" for l in lines))
+        for f in logs:
+            f.unlink()
+    if scrobbler:
+        with open(root / ".scrobbler.log.done", "a", encoding="utf-8") as done:
+            done.write("".join(l + "\n" for l in scrobbler))
+        sl.unlink()
     print(f"  Scrobbled {r['scrobbled']} of {r['sent']} plays to Last.fm "
-          f"({r['skipped']} skipped or too short, {r['unknown']} not in the library).")
+          f"({r['skipped']} skipped or too short, {r['unknown']} not in the library); "
+          f"{r['recorded']} new play(s) recorded for nucOS.")
     return 0
 
 

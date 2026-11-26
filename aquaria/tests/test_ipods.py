@@ -225,11 +225,12 @@ def test_rockbox_playback_log_is_scrobbled_to_the_owner(client, monkeypatch):
              "garbage"]
     body = {"lines": lines, "tz": "America/Chicago"}
 
-    assert client.post(f"/api/host/ipods/{SIG}/plays", headers=H, json=body).json()["off"]  # no Last.fm yet
+    first = client.post(f"/api/host/ipods/{SIG}/plays", headers=H, json=body).json()
+    assert first["off"] and first["recorded"] == 2          # no Last.fm yet: still recorded
     monkeypatch.setattr(accounts, "lastfm_get_session", lambda token: ("blgondzur", "sk-1"))
     client.get("/lastfm/callback?token=t", follow_redirects=False)
     r = client.post(f"/api/host/ipods/{SIG}/plays", headers=H, json=body).json()
-    assert r == {"scrobbled": 2, "sent": 2, "skipped": 2, "unknown": 1}
+    assert r == {"scrobbled": 2, "sent": 2, "skipped": 2, "unknown": 1, "recorded": 0, "clock_skew": 0}
     (method, p, sk), = sent
     assert (method, sk, p["artist[0]"], p["track[0]"]) == ("track.scrobble", "sk-1", "yeule", "sulky baby")
     assert p["timestamp[0]"] == when + 6 * 3600                 # CST is UTC-6 in November

@@ -334,7 +334,7 @@ fi
 
 if [[ $SKIP_SCROBBLE -eq 1 ]]; then
   :
-elif [[ -f "$IPOD_SCROBBLER_LOG" ]]; then
+elif [[ "$MODE" != "aquaria" && -f "$IPOD_SCROBBLER_LOG" ]]; then   # aquaria mode: `plays` sent it
   log "Found scrobbler log: $IPOD_SCROBBLER_LOG"
   if [[ -x "$SCROBBLE_SCRIPT" ]]; then
     python3 "$SCROBBLE_SCRIPT" \

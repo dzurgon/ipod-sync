@@ -482,12 +482,14 @@ function scrobbleStart(t){
   if(ME?.lastfm_user) post("/api/me/nowplaying", {rel_path: t.rel_path}).catch(()=>{});
 }
 function scrobbleCheck(ended=false){
-  if(!PLAY || PLAY.done || !ME?.lastfm_user) return;
+  if(!PLAY || PLAY.done || !ME) return;                  // recorded for nucOS even without Last.fm
   const a = $("#audio"), d = isFinite(a.duration) ? a.duration : null;   // converted streams: unknown
   if(d !== null && d < 30) return;                                       // too short to scrobble
   if(PLAY.heard >= 240 || (d && PLAY.heard >= d / 2) || (ended && PLAY.heard >= 30)){
     PLAY.done = true;
-    post("/api/me/scrobble", {rel_path: PLAY.t.rel_path, started: PLAY.started, duration: d})
+    post("/api/me/scrobble", {rel_path: PLAY.t.rel_path, started: PLAY.started, duration: d,
+                              heard: Math.round(PLAY.heard),
+                              tz: Intl.DateTimeFormat().resolvedOptions().timeZone})
       .catch(e => toast(`Last.fm scrobble failed — ${e.message}`));
   }
 }
@@ -989,6 +991,52 @@ async function renderUsers(){
       <div class="t-name">${esc(u.username)}</div><div class="t-meta">${u.n_public} public playlists · ${u.n_ipods} iPods</div></a>`).join("")}</div>`;
 }
 
+// nucOS (the homelab habit tracker): plays → the Listening habit. Shown on your own profile.
+async function renderNucos(){
+  const box = $("#nucos"); if(!box) return;
+  const s = await api("/api/nucos").catch(()=>null);
+  if(!s || !s.mine || !$("#nucos")) return;
+  const st = {ok: "pill ok", retrying: "pill sync", not_connected: "pill", starting: "pill"}[s.status] || "pill err";
+  const label = s.status === "ok" && s.me ? `Connected · ${esc(s.me.habit?.name)} (${esc(s.me.habit?.sphere)})`
+    : s.status === "ok" ? "Connected" : esc(s.error || s.status);
+  const bf = s.backfill || {};
+  $("#nucos").innerHTML = `
+    <div class="sec-h">nucOS · Listening</div>
+    <div class="card">
+      <div class="bar" style="align-items:center;flex-wrap:wrap;gap:8px;margin:0 0 8px">
+        <span class="${st}">${label}</span>
+        <button class="btn" id="nucTest" ${s.configured?'':'disabled'}>Test connection</button>
+        <button class="btn" id="nucSend" ${s.configured?'':'disabled'}>Send now</button>
+      </div>
+      <div class="sub" style="margin:0 0 6px" id="nucMsg">${s.configured
+        ? `${s.plays} plays recorded${s.plays_since ? ` since ${new Date(s.plays_since*1000).toLocaleDateString()}` : ""} ·
+           ${s.pending} waiting to send · last sent ${s.last_sync ? esc(s.last_sync.replace("T"," ")) : "never"}`
+        : `Set NUCOS_URL and NUCOS_TOKEN in Aquaria's .env (nucOS → Marketplace → Listening → Connect) and restart.`}</div>
+      ${s.configured ? `<div class="bar" style="align-items:center;gap:8px;margin:0">
+        <button class="btn" id="nucBackfill" ${s.lastfm_user && !bf.running ? '' : 'disabled'}
+          title="Imports your Last.fm scrobbles as plays. Safe to run again: nothing is counted twice.">⤓ Backfill from Last.fm</button>
+        <input class="text" id="nucDays" type="number" min="1" max="365" value="${bf.days || 30}" style="width:72px"> days
+        <span class="sub" style="margin:0" id="nucBf">${bf.running ? `importing… page ${bf.pages}, ${bf.recorded} new`
+          : bf.finished ? (bf.error ? `Backfill failed: ${esc(bf.error)}`
+          : `Last backfill: ${bf.seen} scrobbles, ${bf.recorded} new, ${bf.duplicates} already known`)
+          : s.lastfm_user ? "" : "Connect Last.fm above to backfill."}</span></div>` : ""}
+      ${(s.rejected||[]).length ? `<details style="margin-top:8px"><summary class="sub" style="cursor:pointer;margin:0">
+         ${s.rejected.length} item(s) nucOS rejected</summary><div class="list">${s.rejected.map(x=>
+         `<div class="row"><div class="main"><code>${esc(x.id)}</code> <small>· ${esc(x.error)}</small></div></div>`).join("")}</div></details>` : ""}
+    </div>`;
+  const msg = t => { const m = $("#nucMsg"); if(m) m.textContent = t; };
+  $("#nucTest") && ($("#nucTest").onclick = async e=>{
+    e.currentTarget.disabled = true;
+    const r = await post("/api/nucos/test").catch(err=>({ok:false, message: err.message}));
+    toast(r.message); setTimeout(renderNucos, 1500); });
+  $("#nucSend") && ($("#nucSend").onclick = async ()=>{ await post("/api/nucos/send"); msg("Sending…"); setTimeout(renderNucos, 2000); });
+  $("#nucBackfill") && ($("#nucBackfill").onclick = async ()=>{
+    try { await post("/api/nucos/backfill", {days: +$("#nucDays").value || 30}); } catch(err){ return toast(err.message); }
+    const poll = async ()=>{ await renderNucos(); const b = (await api("/api/nucos")).backfill;
+      if(b.running && $("#nucos")) setTimeout(poll, 1500); };
+    poll(); });
+}
+
 async function renderUser(name){
   const nav = NAV;
   let u;
@@ -1018,6 +1066,7 @@ async function renderUser(name){
     ${u.ipods.length ? `<div class="list">${u.ipods.map(i=>`<div class="row"><div class="main">📟 ${esc(i.name)} <small>· last synced ${ago(i.last_sync)}</small></div></div>`).join("")}</div>`
                      : `<div class="empty" style="padding:14px">No iPods linked.</div>`}
     ${u.is_me ? `<a class="btn" data-link href="/ipod">Manage my iPods →</a>` : ""}
+    ${u.is_me ? `<div id="nucos"></div>` : ""}
     ${u.is_me ? `<div class="sec-h">Library</div>
       <div class="bar" style="align-items:center">
         <button class="btn" id="rescan">🔄 Rescan library</button>
@@ -1026,6 +1075,7 @@ async function renderUser(name){
     <div class="sec-h">${u.is_me ? "Your playlists" : "Public playlists"}</div>
     ${u.playlists.length ? `<div class="list">${u.playlists.map(p=>plRow({...p, is_mine:true, owner:u.username})).join("")}</div>`
                          : `<div class="empty" style="padding:14px">None yet.</div>`}`;
+  if(u.is_me) renderNucos();
   if(u.is_me) $("#rescan").onclick = async e=>{
     const b = e.currentTarget; b.disabled = true; b.textContent = "⏳ Scanning…";
     try {

@@ -61,10 +61,23 @@ unreachable, the legacy full-library mirror runs instead.
 AQUARIA_HOST_TOKEN=<random, e.g. openssl rand -hex 32>
 LASTFM_API_KEY=...        # same Last.fm API account as /etc/ipod-sync/config.env
 LASTFM_API_SECRET=...
+NUCOS_URL=http://organizer:8000   # optional: nucOS's Listening habit (see below)
+NUCOS_TOKEN=nucos_...             # nucOS → Marketplace → Listening → Connect (shown once)
 
 # then install the host scripts + udev rule and share the token with them
 sudo bash ~/code/ipod-sync/server/scripts/install-host.sh
 ```
+
+**nucOS (Listening habit).** Every play Aquaria sees — iPod plays from Rockbox's
+`playback.log` (and `.scrobbler.log`), web-player plays, and a Last.fm backfill — is stored
+with a stable id (`ipod-<unix start>-<track hash>`, `web-…`, `lastfm-…`) and, for
+`NUCOS_USER` (default the `AQUARIA_DEFAULT_USER`), queued in an outbox in the same
+transaction. A background sender posts `listen` items to `/api/integrations/v1/activity`
+(≤ 500 per request, 5 s timeouts; retries 30 s → 1 h; stops on 401/410). The profile page
+shows the status, **Test connection** (`GET /me`), **Send now**, and **Backfill from
+Last.fm** (safe to repeat: a scrobble the iPod or web player already recorded — same artist +
+title within 2 minutes — isn't counted twice). Stock-firmware Play Counts aren't supported:
+the sync runs on Rockbox.
 
 ## Run locally (dev)
 

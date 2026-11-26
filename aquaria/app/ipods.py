@@ -29,8 +29,6 @@ import hmac
 import json
 import re
 import time
-from datetime import datetime, timezone
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from typing import Literal
 
@@ -38,7 +36,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from . import config, folder_art, indexer, playlists, state, tags
+from . import config, folder_art, indexer, playlists, plays, state, tags
 from .indexer import IMAGE_EXTS
 from .accounts import require_user
 from .parser import parse_genre
@@ -460,7 +458,9 @@ def host_playlist_cover(sig: str, playlist_id: int):
 
 
 class Plays(BaseModel):
-    lines: list[str]          # playback.log: "<time>:<elapsed ms>:<length ms>:<path on the iPod>"
+    lines: list[str] = []     # playback.log: "<time>:<elapsed ms>:<length ms>:<path on the iPod>"
+    scrobbler: list[str] = [] # .scrobbler.log (the Rockbox plugin's export): TSV, L/S rated
+    history: list[str] = []   # playback.log lines already scrobbled: recorded, not scrobbled again
     tz: str = "UTC"           # the iPod clock's zone (Rockbox logs local time without one)
 
 
@@ -476,54 +476,108 @@ def _track_for_ipod_path(path: str):
     return row or state.conn.execute(q + "substr(rel_path, -length(?1)) = ?1 LIMIT 1", (tail,)).fetchone()
 
 
+def _parse_playback(line: str):
+    """(local start, listened s, length s, path) of a playback.log line, or None."""
+    parts = line.strip().split(":", 3)
+    if len(parts) != 4 or not all(x.isdigit() for x in parts[:3]):
+        return None                                     # comments, partial lines
+    return int(parts[0]), int(parts[1]) / 1000, int(parts[2]) / 1000, parts[3]
+
+
+def _parse_scrobbler(line: str):
+    """(local start, listened s, length s, artist, album, title, track no) of an L line, or None.
+    .scrobbler.log: artist, album, title, track, length s, L|S, start, mbid (tab separated)."""
+    f = line.rstrip("\n").split("\t")
+    if line.startswith("#") or len(f) < 7 or f[5] != "L" or not f[6].isdigit():
+        return None
+    length = int(f[4]) if f[4].lstrip("-").isdigit() and int(f[4]) > 0 else 0
+    return int(f[6]), length, length, f[0], f[1], f[2], int(f[3]) if f[3].isdigit() else None
+
+
+def _counts(listened: float, length: float) -> bool:
+    """Last.fm's rule: the track is over 30 s and was heard for half of it or 4 minutes."""
+    return length >= 30 and listened >= min(length / 2, 240)
+
+
 @router.post("/api/host/ipods/{sig}/plays", dependencies=[Depends(require_host)])
 def host_plays(sig: str, body: Plays):
-    """Scrobble the plays Rockbox logged (it counts a play once it's been heard for half
-    the track or 4 minutes, like Last.fm). 502 = nothing was lost, send them again later."""
+    """Record the plays Rockbox logged (for nucOS too), and scrobble the new ones to the
+    owner's Last.fm. Ids are stable, so sending the same lines again changes nothing.
+    502 = Last.fm failed: nothing was lost, send them again later."""
     ip = _linked(sig)
     if not ip:
         raise HTTPException(404, "iPod not linked")
+    tz = plays.zone(body.tz)
+    counts = {"skipped": 0, "unknown": 0}
+
+    # Resolve every line to (utc start, listened s, length s, metadata, scrobble it?).
+    entries = []
+    for line, fresh in [(l, True) for l in body.lines] + [(l, False) for l in body.history]:
+        p = _parse_playback(line)
+        if not p:
+            continue
+        local, listened, length, path = p
+        entries.append((local, listened, length, fresh, path, None))
+    for line in body.scrobbler:
+        p = _parse_scrobbler(line)
+        if p:
+            local, listened, length, artist, album, title, num = p
+            entries.append((local, listened, length, True, None,
+                            {"artist": artist, "track": title, "album": album, "trackNumber": num}))
+
+    # A fast iPod clock shows as new plays ending after now; shift this batch back by it.
+    fresh_ends = [plays.local_clock_to_utc(e[0], tz) + int(e[1]) for e in entries if e[3] and e[0] > 1e9]
+    skew = plays.clock_skew(fresh_ends)
+
+    to_scrobble, recorded = [], 0
+    with state.write_lock:
+        for local, listened, length, fresh, path, meta in entries:
+            if local < 1_000_000_000 or not _counts(listened, length):
+                counts["skipped"] += 1                  # clock unset / skipped / too short
+                continue
+            if meta is None:
+                t = _track_for_ipod_path(path)
+                meta = t and tags.scrobble_meta(config.MUSIC_ROOT / t["rel_path"], dict(t))
+            if not meta or not meta["artist"]:
+                counts["unknown"] += 1
+                continue
+            utc = plays.local_clock_to_utc(local, tz) - (skew if fresh else 0)
+            if plays.record(state.conn, ip["user_id"], device="ipod", ts=utc, seconds=int(listened),
+                            artist=meta["artist"], title=meta["track"], album=meta["album"] or "", tz=tz):
+                recorded += 1
+            if fresh:
+                to_scrobble.append(meta | {"duration": int(length), "timestamp": utc})
+        state.conn.commit()
+    _nucos_wake()
+
     owner = state.conn.execute("SELECT lastfm_user, lastfm_session FROM users WHERE id=?",
                                (ip["user_id"],)).fetchone()
+    out = {"recorded": recorded, "sent": len(to_scrobble), "clock_skew": skew, **counts}
     if not ip["sync"]["scrobble"] or not owner["lastfm_session"]:
-        return {"scrobbled": 0, "off": True}
-    try:
-        zone = ZoneInfo(body.tz)
-    except (ZoneInfoNotFoundError, ValueError):
-        zone = ZoneInfo("UTC")
-    plays, counts = [], {"skipped": 0, "unknown": 0}
-    for line in body.lines:
-        parts = line.strip().split(":", 3)
-        if len(parts) != 4 or not all(x.isdigit() for x in parts[:3]):
-            continue                                    # comments, partial lines
-        when, elapsed, length, path = int(parts[0]), int(parts[1]), int(parts[2]), parts[3]
-        if length < 30_000 or elapsed < min(length / 2, 240_000) or when < 1_000_000_000:
-            counts["skipped"] += 1                      # too short / skipped / clock unset
-            continue
-        t = _track_for_ipod_path(path)
-        meta = t and tags.scrobble_meta(config.MUSIC_ROOT / t["rel_path"], dict(t))
-        if not meta or not meta["artist"]:
-            counts["unknown"] += 1
-            continue
-        # Rockbox's clock is local time stored as if it were UTC: reinterpret it in its zone.
-        utc = int(datetime.fromtimestamp(when, timezone.utc).replace(tzinfo=zone).timestamp())
-        plays.append(meta | {"duration": length // 1000, "timestamp": utc})
+        return out | {"scrobbled": 0, "off": True}
     accepted = 0
     from .accounts import lastfm_post
-    for i in range(0, len(plays), 50):                  # Last.fm takes 50 per call
-        batch = {f"{k}[{n}]": v for n, p in enumerate(plays[i:i + 50]) for k, v in p.items()}
+    for i in range(0, len(to_scrobble), 50):            # Last.fm takes 50 per call
+        batch = {f"{k}[{n}]": v for n, p in enumerate(to_scrobble[i:i + 50]) for k, v in p.items()}
         try:
             r = lastfm_post("track.scrobble", batch, owner["lastfm_session"])
         except Exception as e:
             raise HTTPException(502, f"Last.fm: {e}")
-        accepted += int(r.get("scrobbles", {}).get("@attr", {}).get("accepted", len(plays[i:i + 50])))
-    if plays:
+        accepted += int(r.get("scrobbles", {}).get("@attr", {}).get("accepted", len(to_scrobble[i:i + 50])))
+    if to_scrobble:
         with state.write_lock:
             _activity(ip["user_id"], ip["id"], "scrobble",
                       f"Scrobbled {accepted} play{'s' * (accepted != 1)} from {ip['name']} "
                       f"to last.fm/user/{owner['lastfm_user']}")
             state.conn.commit()
-    return {"scrobbled": accepted, "sent": len(plays), **counts}
+    return out | {"scrobbled": accepted}
+
+
+def _nucos_wake() -> None:
+    from . import main                                  # the running app's sender, if started
+    w = getattr(main, "NUCOS", None)
+    if w:
+        w.wake()
 
 
 @router.post("/api/host/ipods/{sig}/report", dependencies=[Depends(require_host)])

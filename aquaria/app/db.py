@@ -126,6 +126,40 @@ CREATE TABLE IF NOT EXISTS meta (
     value TEXT
 );
 
+-- Every listen Aquaria knows about (iPod plays, the web player, a Last.fm backfill).
+-- id is stable forever (ipod-<unix start>-<track hash>, web-…, lastfm-…): seeing the same
+-- play again changes nothing, so imports are safe to repeat.
+CREATE TABLE IF NOT EXISTS plays (
+    id         TEXT PRIMARY KEY,
+    user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    ts         INTEGER NOT NULL,              -- unix start time (UTC)
+    at         TEXT NOT NULL,                 -- the same, ISO with the listener's UTC offset
+    seconds    INTEGER NOT NULL,              -- time actually listened
+    artist     TEXT NOT NULL DEFAULT '',
+    title      TEXT NOT NULL DEFAULT '',
+    album      TEXT NOT NULL DEFAULT '',
+    device     TEXT NOT NULL,                 -- ipod | web | lastfm
+    created_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_plays_user_ts ON plays(user_id, ts);
+
+-- nucOS outbox: written in the same transaction as the play; payload NULL = a deletion.
+-- nucos.py sends unsent rows oldest first. nucos_sent remembers what each nucOS
+-- connection already accepted, so an unchanged item is never sent to it twice.
+CREATE TABLE IF NOT EXISTS nucos_outbox (
+    seq     INTEGER PRIMARY KEY AUTOINCREMENT,
+    item_id TEXT NOT NULL,
+    payload TEXT,
+    sent_at REAL
+);
+CREATE INDEX IF NOT EXISTS idx_nucos_outbox_unsent ON nucos_outbox(sent_at, seq);
+CREATE TABLE IF NOT EXISTS nucos_sent (
+    connection TEXT NOT NULL,
+    item_id    TEXT NOT NULL,
+    digest     TEXT NOT NULL,
+    PRIMARY KEY (connection, item_id)
+);
+
 -- Login sessions: only a SHA-256 of the cookie token is stored.
 CREATE TABLE IF NOT EXISTS sessions (
     token_hash TEXT PRIMARY KEY,

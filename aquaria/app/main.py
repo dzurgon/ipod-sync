@@ -13,6 +13,7 @@ import hashlib
 import shutil
 import subprocess
 import threading
+import time
 import urllib.parse
 import zipfile
 from contextlib import asynccontextmanager
@@ -23,7 +24,7 @@ from fastapi.responses import FileResponse, HTMLResponse, Response, StreamingRes
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import accounts, config, folder_art, indexer, ipods, library, playlists, state
+from . import accounts, config, folder_art, indexer, ipods, library, nucos, playlists, plays, state
 from .accounts import current_user, require_user
 from .indexer import IMAGE_EXTS
 
@@ -41,11 +42,19 @@ def _scan_and_sync() -> dict:
     return summary
 
 
+# Sends recorded plays to nucOS in the background (idle without NUCOS_URL / NUCOS_TOKEN).
+NUCOS: nucos.Worker | None = None
+
+
 @asynccontextmanager
 async def lifespan(_app):
+    global NUCOS
     # Index in the background so the server is reachable immediately on boot.
     threading.Thread(target=_scan_and_sync, daemon=True).start()
+    worker = NUCOS = nucos.Worker(conn, write_lock)
+    worker.start()
     yield
+    worker.stop()
 
 
 app = FastAPI(title="Aquaria Music Manager", version="0.4.0", lifespan=lifespan)
@@ -489,6 +498,83 @@ async def folder_art_upload(rel_dir: str = Form(...), file: UploadFile = File(..
     except FileNotFoundError:
         raise HTTPException(404, "not a genre, artist or album folder")
     return {"image": img}
+
+
+# ── nucOS (the Listening habit) and the plays it's fed from ───────────────────
+
+def _nucos_user(user: dict) -> dict:
+    if user["username"].casefold() != config.NUCOS_USER.casefold():
+        raise HTTPException(403, f"nucOS is connected for {config.NUCOS_USER}")
+    return user
+
+
+@app.get("/api/nucos")
+def nucos_status(user: dict = Depends(require_user)):
+    if user["username"].casefold() != config.NUCOS_USER.casefold():
+        return {"mine": False, "user": config.NUCOS_USER}
+    n = conn.execute("SELECT COUNT(*), MIN(ts) FROM plays WHERE user_id=?", (user["id"],)).fetchone()
+    return nucos.status(conn) | {"mine": True, "backfill": plays.BACKFILL, "plays": n[0],
+                                 "plays_since": n[1], "lastfm_user": user["lastfm_user"]}
+
+
+@app.post("/api/nucos/test")
+def nucos_test(user: dict = Depends(require_user)):
+    """Ask nucOS which habit the token feeds (GET /me)."""
+    _nucos_user(user)
+    client = nucos.make_client()
+    if not client:
+        return {"ok": False, "message": nucos.MSG_NOT_CONNECTED}
+    try:
+        me = client.me()
+    except nucos.NucosError as e:
+        return {"ok": False, "message": str(e)}
+    if NUCOS:
+        NUCOS.wake(force=True)                   # a fixed token: resume sending now
+    return {"ok": True, "message": nucos.describe_me(me), "me": me}
+
+
+@app.post("/api/nucos/send")
+def nucos_send(user: dict = Depends(require_user)):
+    _nucos_user(user)
+    if NUCOS:
+        NUCOS.wake(force=True)
+    return {"ok": True}
+
+
+class Backfill(BaseModel):
+    days: int = 30
+
+
+@app.post("/api/nucos/backfill")
+def nucos_backfill(body: Backfill, user: dict = Depends(require_user)):
+    """Import the last `days` of this user's Last.fm scrobbles as plays (safe to repeat)."""
+    _nucos_user(user)
+    if not user["lastfm_user"] or not config.LASTFM_API_KEY:
+        raise HTTPException(409, "connect Last.fm on your profile first")
+    days = max(1, min(body.days, 365))
+    with write_lock:
+        if plays.BACKFILL["running"]:
+            return plays.BACKFILL
+        plays.BACKFILL.update(running=True, days=days, pages=0, seen=0, recorded=0, duplicates=0,
+                              error=None, finished=None)
+
+    def run():
+        try:
+            plays.backfill_lastfm(conn, write_lock, user["id"], user["lastfm_user"], days,
+                                  on_page=plays.BACKFILL.update)
+        except Exception as e:
+            plays.BACKFILL["error"] = str(e)[:300]
+        finally:
+            plays.BACKFILL.update(running=False, finished=time.time())
+            if NUCOS:
+                NUCOS.wake()
+    threading.Thread(target=run, daemon=True).start()
+    return plays.BACKFILL
+
+
+@app.get("/api/plays")
+def my_plays(limit: int = 50, user: dict = Depends(require_user)):
+    return {"plays": plays.recent(conn, user["id"], max(1, min(limit, 500)))}
 
 
 # ── Scan ─────────────────────────────────────────────────────────────────────
