@@ -461,6 +461,7 @@ class Plays(BaseModel):
     lines: list[str] = []     # playback.log: "<time>:<elapsed ms>:<length ms>:<path on the iPod>"
     scrobbler: list[str] = [] # .scrobbler.log (the Rockbox plugin's export): TSV, L/S rated
     history: list[str] = []   # playback.log lines already scrobbled: recorded, not scrobbled again
+    history_collected_at: float | None = None   # when the host last appended to that history (UTC)
     tz: str = "UTC"           # the iPod clock's zone (Rockbox logs local time without one)
 
 
@@ -525,9 +526,12 @@ def host_plays(sig: str, body: Plays):
             entries.append((local, listened, length, True, None,
                             {"artist": artist, "track": title, "album": album, "trackNumber": num}))
 
-    # A fast iPod clock shows as new plays ending after now; shift this batch back by it.
-    fresh_ends = [plays.local_clock_to_utc(e[0], tz) + int(e[1]) for e in entries if e[3] and e[0] > 1e9]
-    skew = plays.clock_skew(fresh_ends)
+    # A fast iPod clock shows as plays ending after they were collected: new plays after now,
+    # history after the host last wrote it. Shift each back by its own excess.
+    ends = lambda fresh: [plays.local_clock_to_utc(e[0], tz) + int(e[1]) for e in entries
+                          if e[3] == fresh and e[0] > 1e9]
+    skew = plays.clock_skew(ends(True))
+    hskew = plays.clock_skew(ends(False), body.history_collected_at) if body.history_collected_at else 0
 
     to_scrobble, recorded = [], 0
     with state.write_lock:
@@ -541,7 +545,7 @@ def host_plays(sig: str, body: Plays):
             if not meta or not meta["artist"]:
                 counts["unknown"] += 1
                 continue
-            utc = plays.local_clock_to_utc(local, tz) - (skew if fresh else 0)
+            utc = plays.local_clock_to_utc(local, tz) - (skew if fresh else hskew)
             if plays.record(state.conn, ip["user_id"], device="ipod", ts=utc, seconds=int(listened),
                             artist=meta["artist"], title=meta["track"], album=meta["album"] or "", tz=tz):
                 recorded += 1
@@ -552,7 +556,7 @@ def host_plays(sig: str, body: Plays):
 
     owner = state.conn.execute("SELECT lastfm_user, lastfm_session FROM users WHERE id=?",
                                (ip["user_id"],)).fetchone()
-    out = {"recorded": recorded, "sent": len(to_scrobble), "clock_skew": skew, **counts}
+    out = {"recorded": recorded, "sent": len(to_scrobble), "clock_skew": skew, "history_skew": hskew, **counts}
     if not ip["sync"]["scrobble"] or not owner["lastfm_session"]:
         return out | {"scrobbled": 0, "off": True}
     accepted = 0

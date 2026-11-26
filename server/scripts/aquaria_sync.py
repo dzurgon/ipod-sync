@@ -388,6 +388,12 @@ def _local_zone() -> str:
         return "UTC"
 
 
+def _shift(line: str, seconds: int) -> str:
+    """A playback.log line with its start time moved back by `seconds`."""
+    head, sep, rest = line.partition(":")
+    return f"{int(head) - seconds}{sep}{rest}" if seconds and head.isdigit() else line
+
+
 HISTORY_DAYS = 90       # iPod plays already scrobbled, re-sent each sync so Aquaria/nucOS have them
 
 
@@ -414,22 +420,32 @@ def cmd_plays(a) -> int:
               " once and let it enable logging."))
         if not history:
             return 0
+    collected = done_log.stat().st_mtime if done_log.is_file() else None
     try:
         r = api("POST", sig_path(a.sig) + "/plays",
-                {"lines": lines, "scrobbler": scrobbler, "history": history, "tz": _local_zone()})
+                {"lines": lines, "scrobbler": scrobbler, "history": history, "tz": _local_zone(),
+                 "history_collected_at": collected})
     except Unreachable as e:
         print(f"  Recording plays failed, kept on the iPod for next sync: {e}", file=sys.stderr)
         return 0
     if r.get("clock_skew"):
         print(f"  WARN: the iPod's clock is about {r['clock_skew'] / 3600:g} h fast — plays were "
               "shifted back. Fix it on the iPod: Settings → Time & Date.")
+    if r.get("history_skew") and done_log.is_file():
+        # History written before clocks were checked: store it corrected, once, so re-reading
+        # it never yields the same plays at other times.
+        hs = int(r["history_skew"])
+        done_log.write_text("".join(_shift(l, hs) + "\n" for l in
+                                    done_log.read_text(encoding="utf-8", errors="replace").splitlines()),
+                            encoding="utf-8")
+        print(f"  Corrected {hs / 3600:g} h of iPod clock error in the play history.")
     if r.get("off"):
         print(f"  Recorded {r['recorded']} new play(s); scrobbling is off for this iPod (or its owner "
               "hasn't connected Last.fm), so new plays stay on the iPod.")
         return 0
     if lines:
-        with open(done_log, "a", encoding="utf-8") as done:
-            done.write("".join(l + "\n" for l in lines))
+        with open(done_log, "a", encoding="utf-8") as done:            # kept with corrected times
+            done.write("".join(_shift(l, int(r.get("clock_skew") or 0)) + "\n" for l in lines))
         for f in logs:
             f.unlink()
     if scrobbler:

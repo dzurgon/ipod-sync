@@ -236,3 +236,18 @@ def test_lastfm_backfill_is_safe_to_repeat_and_dedupes(client, nuc):
     w.step()
     last = fake.pushes()[-1]
     assert last["deleted"] == [phone[0]["id"]] and last["items"][0]["device"] == "ipod"
+
+
+def test_history_from_a_fast_clock_is_corrected_against_when_it_was_collected(client, nuc):
+    fake, w = nuc
+    collected = 1_764_130_000                       # when the host wrote the history (UTC)
+    real_start = collected - 1500                    # played 25 minutes before that
+    rel = track(client, "sulky")
+    clock_local = real_start - 6 * 3600 + 3600       # an hour fast on a Chicago clock (November)
+    r = client.post(f"/api/host/ipods/{SIG}/plays", headers=H, json={
+        "history": [f"{clock_local}:200000:201000:/FLAC/{rel}"], "tz": "America/Chicago",
+        "history_collected_at": collected}).json()
+    assert (r["history_skew"], r["clock_skew"], r["recorded"], r["sent"]) == (3600, 0, 1, 0)
+    w.step()
+    (item,) = fake.pushes()[0]["items"]
+    assert item["id"].startswith(f"ipod-{real_start}-")
