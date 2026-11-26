@@ -106,10 +106,11 @@ def test_fast_ipod_clock_is_corrected(client, nuc):
     r = client.post(f"/api/host/ipods/{SIG}/plays", headers=H,
                     json={"lines": [line], "tz": "America/Chicago"}).json()
     if plays.zone("America/Chicago").utcoffset(dt.datetime.now()) == dt.timedelta(hours=-6):
-        assert r["clock_skew"] == 3600
+        # A lower bound: the play is moved back until it ends by now, never past the truth.
+        assert r["clock_skew"] == 3240                     # 3600 - the 400 s since it ended, to the minute
         w.step()
         (item,) = fake.pushes()[0]["items"]
-        assert item["id"].startswith(f"ipod-{real_start_utc}-")
+        assert item["id"].startswith(f"ipod-{real_start_utc + 3600 - 3240}-")
 
 
 def test_web_play_recorded_without_lastfm(client, nuc):
@@ -243,11 +244,17 @@ def test_history_from_a_fast_clock_is_corrected_against_when_it_was_collected(cl
     collected = 1_764_130_000                       # when the host wrote the history (UTC)
     real_start = collected - 1500                    # played 25 minutes before that
     rel = track(client, "sulky")
-    clock_local = real_start - 6 * 3600 + 3600       # an hour fast on a Chicago clock (November)
+    clock_local = real_start - 6 * 3600 + 3600 + 77  # 61 min 17 s fast on a Chicago clock (November)
     r = client.post(f"/api/host/ipods/{SIG}/plays", headers=H, json={
         "history": [f"{clock_local}:200000:201000:/FLAC/{rel}"], "tz": "America/Chicago",
         "history_collected_at": collected}).json()
-    assert (r["history_skew"], r["clock_skew"], r["recorded"], r["sent"]) == (3600, 0, 1, 0)
+    # Ended 1300 s before it was collected: corrected by the provable 3677 - 1300 s, to the minute.
+    assert (r["history_skew"], r["clock_skew"], r["recorded"], r["sent"]) == (2400, 0, 1, 0)
     w.step()
     (item,) = fake.pushes()[0]["items"]
-    assert item["id"].startswith(f"ipod-{real_start}-")
+    assert item["id"].startswith(f"ipod-{real_start + 3677 - 2400}-")
+    # The same history re-read after the host stored it corrected (or over-corrected): no new play.
+    again = client.post(f"/api/host/ipods/{SIG}/plays", headers=H, json={
+        "history": [f"{clock_local - 5400}:200000:201000:/FLAC/{rel}"], "tz": "America/Chicago",
+        "history_collected_at": collected + 3600}).json()
+    assert again["recorded"] == 0

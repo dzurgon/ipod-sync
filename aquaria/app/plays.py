@@ -44,12 +44,12 @@ def local_clock_to_utc(local_ts: int, tz: ZoneInfo) -> int:
 
 
 def clock_skew(ends_utc: list[int], now: float | None = None) -> int:
-    """How far a device clock runs fast, judged by plays that would have ended after now
-    (impossible: they were collected now). Rounded up to 30 minutes — a time zone or a
-    missed DST change, not drift. 0 when nothing ends in the future (a slow clock can't
-    be detected this way)."""
+    """How far a device clock runs fast, judged by plays that would have ended after they
+    were collected (`now`). Rockbox stops playback when USB connects, so the last play
+    usually ends right at plug-in and the overrun is the clock's error (rounded up to the
+    minute). 0 when nothing ends late — a slow clock can't be detected this way."""
     over = max(ends_utc, default=0) - (now if now is not None else time.time())
-    return int(math.ceil(over / 1800) * 1800) if over > 60 else 0
+    return int(math.ceil(over / 60) * 60) if over > 60 else 0
 
 
 def track_hash(artist: str, title: str, album: str) -> str:
@@ -105,6 +105,13 @@ def record(conn, user_id: int, *, device: str, ts: int, seconds: int, artist: st
             if nucos:
                 conn.execute("INSERT INTO nucos_outbox(item_id, payload) VALUES (?, NULL)", (dup["id"],))
     return pid
+
+
+def remove(conn, user_id: int, pid: str) -> None:
+    """Forget a play (and take it back from nucOS)."""
+    conn.execute("DELETE FROM plays WHERE id=? AND user_id=?", (pid, user_id))
+    if is_nucos_user(conn, user_id):
+        conn.execute("INSERT INTO nucos_outbox(item_id, payload) VALUES (?, NULL)", (pid,))
 
 
 def known_near(conn, user_id: int, artist: str, title: str, ts: int,

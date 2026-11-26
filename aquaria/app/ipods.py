@@ -477,6 +477,11 @@ def _track_for_ipod_path(path: str):
     return row or state.conn.execute(q + "substr(rel_path, -length(?1)) = ?1 LIMIT 1", (tail,)).fetchone()
 
 
+# A history line that would land within this long of a play Aquaria already has (same artist +
+# title) is that play seen through a differently corrected clock, not a new one.
+HISTORY_SAME_PLAY = 2 * 3600
+
+
 def _parse_playback(line: str):
     """(local start, listened s, length s, path) of a playback.log line, or None."""
     parts = line.strip().split(":", 3)
@@ -546,6 +551,11 @@ def host_plays(sig: str, body: Plays):
                 counts["unknown"] += 1
                 continue
             utc = plays.local_clock_to_utc(local, tz) - (skew if fresh else hskew)
+            pid = plays.play_id("ipod", utc, meta["artist"], meta["track"], meta["album"] or "")
+            if (not fresh and not state.conn.execute("SELECT 1 FROM plays WHERE id=?", (pid,)).fetchone()
+                    and plays.known_near(state.conn, ip["user_id"], meta["artist"], meta["track"], utc,
+                                         HISTORY_SAME_PLAY)):
+                continue                                # history re-read at other times: same play
             if plays.record(state.conn, ip["user_id"], device="ipod", ts=utc, seconds=int(listened),
                             artist=meta["artist"], title=meta["track"], album=meta["album"] or "", tz=tz):
                 recorded += 1
