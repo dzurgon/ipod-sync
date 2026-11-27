@@ -35,7 +35,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-from PIL import Image, ImageFile
+from PIL import Image, ImageFile, ImageOps
 
 # A cover missing its last few bytes (an interrupted download) still decodes fine.
 ImageFile.LOAD_TRUNCATED_IMAGES = True
@@ -224,7 +224,9 @@ def to_jpeg(data: bytes) -> bytes:
     if not sniff_ext(data):
         raise ValueError("not a JPEG, PNG or WebP image")
     try:
-        img = Image.open(io.BytesIO(data))
+        # Phone photos are stored sideways with an EXIF "rotate me" tag; apply it, since the
+        # JPEG written below has no EXIF and every viewer would show the raw pixels.
+        img = ImageOps.exif_transpose(Image.open(io.BytesIO(data)))
         img.thumbnail((COVER_MAX_PX, COVER_MAX_PX))
         out = io.BytesIO()
         img.convert("RGB").save(out, "JPEG", quality=90, progressive=False)
@@ -243,6 +245,7 @@ def ipod_art(src: Path, cache_dir: Path, max_px: int) -> Path:
     cache_dir.mkdir(parents=True, exist_ok=True)
     img = Image.open(src)
     img.draft("RGB", (max_px, max_px))         # JPEG: decode at reduced scale, much faster
+    img = ImageOps.exif_transpose(img)         # sideways phone photos, upright
     img.thumbnail((max_px, max_px))
     tmp = out.with_suffix(f".{os.getpid()}.tmp")
     img.convert("RGB").save(tmp, "JPEG", quality=88, progressive=False)

@@ -597,7 +597,7 @@ def index():
 # Page URLs (/album/<folder>, /artist/<name>, /user/<name>, /playlist/<id>, …) are
 # routed client-side; the server answers each with the same single-page app.
 PAGES = ("library", "artists", "albums", "artist", "album", "playlists", "playlist",
-         "activity", "ipod", "user", "users", "login", "signup")
+         "activity", "ipod", "user", "users", "login", "signup", "search")
 for _page in PAGES:
     app.add_api_route(f"/{_page}", index, response_class=HTMLResponse, include_in_schema=False)
     app.add_api_route(f"/{_page}/{{rest:path}}", index, response_class=HTMLResponse,

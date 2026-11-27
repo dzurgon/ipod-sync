@@ -238,7 +238,7 @@ def test_album_cover_upload_becomes_baseline_jpeg(client):
 
 def test_page_urls_serve_the_app(client):
     for url in ("/library/0_FOLK/Pete Seeger", "/album/0_POP/Charli XCX/BRAT (2025)",
-                "/artist/Charli XCX", "/playlists", "/playlist/1", "/albums"):
+                "/artist/Charli XCX", "/playlists", "/playlist/1", "/albums", "/search?q=brat"):
         r = client.get(url)
         assert r.status_code == 200 and "<title>Aquaria" in r.text, url
     assert client.get("/api/stats").headers["content-type"].startswith("application/json")
@@ -307,3 +307,16 @@ def test_album_lookup_names_from_folder_conventions():
     assert lookup_names("Black Sabbath", "Black Sabbath - Technical Ecstasy") == ("Black Sabbath", "Technical Ecstasy")
     assert lookup_names("Beck", "Odelay") == ("Beck", "Odelay")
     assert lookup_names("", "KWUR 90.3 FM Presents.. UNDERGROUND") == ("", "KWUR 90.3 FM Presents.. UNDERGROUND")
+
+
+def test_sideways_phone_photo_is_stored_upright(client):
+    from PIL import Image
+    from app import folder_art
+    img = Image.new("RGB", (1200, 400), "red")              # landscape pixels…
+    exif = img.getexif(); exif[0x0112] = 6                   # …that the phone says to rotate 90°
+    raw = io.BytesIO(); img.save(raw, "JPEG", exif=exif)
+    out = Image.open(io.BytesIO(folder_art.to_jpeg(raw.getvalue())))
+    assert out.size == (333, 1000) and 0x0112 not in out.getexif()   # upright (and ≤ 1000 px)
+    pid = client.post("/api/playlists", json={"name": "Phone pic"}).json()["id"]
+    client.post(f"/api/playlists/{pid}/cover", files={"file": ("p.jpg", raw.getvalue(), "image/jpeg")})
+    assert Image.open(io.BytesIO(client.get(f"/playlist-cover/{pid}").content)).size == (333, 1000)

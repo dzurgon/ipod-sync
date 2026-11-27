@@ -58,13 +58,14 @@ DAY_MQ.addEventListener("change", () => applyTheme());
     color-scheme: light;
   }
   *{box-sizing:border-box}
+  [hidden]{display:none !important}   /* .btn etc. set display; `hidden` must still win */
   body{
     margin:0;min-height:100vh;color:var(--ink);
     font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
     background:var(--backdrop) fixed;
   }
   a{color:var(--aqua)}
-  .wrap{max-width:1180px;margin:0 auto;padding:26px 16px 150px}
+  .wrap{max-width:1180px;margin:0 auto;padding:26px 16px 120px}
   h1 a.home{color:inherit;text-decoration:none}
   h1{font-weight:700;letter-spacing:.3px;margin:0 0 2px;font-size:26px;
      text-shadow:0 2px 18px var(--shadow)}
@@ -205,39 +206,75 @@ DAY_MQ.addEventListener("change", () => applyTheme());
 
   .empty{color:var(--ink-dim);text-align:center;padding:40px}
 
-  /* Player bar */
+  /* Mini player (bottom bar) — tap the song to open Now Playing */
   .player{position:fixed;left:0;right:0;bottom:0;z-index:15;background:var(--player-bg);
-          border-top:1px solid var(--line);backdrop-filter:blur(12px);padding:8px 16px;
-          display:none;align-items:center;gap:14px}
+          border-top:1px solid var(--line);backdrop-filter:blur(14px);padding:8px 14px 10px;
+          display:none;align-items:center;gap:12px}
   .player.on{display:flex}
-  .player .now{min-width:0;flex:1;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;font-size:13px}
-  .player audio{flex:2;min-width:180px;height:36px}
-  .pctl{display:flex;gap:4px}
-  .pbtn{background:none;border:1px solid transparent;border-radius:8px;color:var(--ink);font-size:16px;
-        padding:4px 7px;cursor:pointer;opacity:.75}
-  .pbtn:hover{opacity:1;border-color:var(--line)}
-  .pbtn[aria-pressed="true"]{opacity:1;border-color:var(--aqua);background:rgba(0,229,255,.12)}
-  @media (max-width:560px){ .player{flex-wrap:wrap;gap:6px} .player .now{flex-basis:100%} }
+  .player .bar-prog{position:absolute;left:0;right:0;top:-1px;height:3px;background:var(--line)}
+  .player .bar-prog i{display:block;height:100%;width:0;background:var(--aqua)}
+  .player .np-open{display:flex;align-items:center;gap:10px;min-width:0;flex:1;cursor:pointer;
+                   background:none;border:0;color:inherit;font:inherit;text-align:left;padding:0}
+  .player .np-open img,.player .np-open .ph{width:44px;height:44px;border-radius:8px;object-fit:cover;flex-shrink:0;
+                   background:var(--thumb-bg);display:flex;align-items:center;justify-content:center}
+  .player .np-open .txt{min-width:0}
+  .player .np-open b,.player .np-open small{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .player .np-open small{color:var(--ink-dim);font-size:12px}
+  .pctl{display:flex;gap:2px;align-items:center}
+  .pbtn{background:none;border:1px solid transparent;border-radius:50%;color:var(--ink);font-size:17px;
+        width:38px;height:38px;cursor:pointer;opacity:.8;display:inline-flex;align-items:center;justify-content:center}
+  .pbtn:hover{opacity:1;background:var(--glass-strong)}
+  .pbtn.big{width:46px;height:46px;font-size:20px;background:var(--aqua);color:var(--on-aqua);opacity:1}
+  .pbtn[aria-pressed="true"]{opacity:1;color:var(--aqua);border-color:var(--aqua)}
+  .player .time{font-size:11px;color:var(--ink-dim);font-variant-numeric:tabular-nums;min-width:74px;text-align:right}
+  @media (max-width:600px){ .player .time,.player .opt{display:none} }
 
-  /* Floating "currently adding" search */
-  .fab{position:fixed;left:16px;bottom:22px;z-index:20;transition:bottom .2s}
-  body.playing .fab{bottom:76px}
-  .fab .bubble{background:var(--aqua);color:var(--on-aqua);border-radius:26px;padding:12px 16px;font-weight:600;
-               box-shadow:0 10px 30px var(--shadow);cursor:pointer;display:flex;align-items:center;gap:8px;
-               max-width:calc(100vw - 32px)}
-  .fab .bubble span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .fab .search{display:none;margin-bottom:10px;background:var(--surface);border:1px solid var(--aqua);
-               border-radius:16px;padding:12px;width:min(360px,calc(100vw - 32px));box-shadow:0 16px 40px var(--shadow)}
-  .fab.open .search{display:block}
-  .fab input,.fab select{width:100%;background:var(--field);border:1px solid var(--line);border-radius:10px;
-             color:var(--ink);padding:9px 11px;font-size:14px;outline:none}
-  .fab select{margin-bottom:8px}
-  .res{max-height:300px;overflow:auto;margin-top:8px}
-  .res .grp{font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--aqua-dim);margin:8px 2px 4px}
-  .res .item{padding:6px 8px;border-radius:8px;cursor:pointer;font-size:13px;display:flex;gap:6px;align-items:center}
-  .res .item:hover{background:var(--glass-strong)}
-  .res .item .main{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .res .item small{color:var(--ink-dim)}
+  /* Now Playing (full screen) */
+  .np{position:fixed;inset:0;z-index:40;display:none;overflow:auto;color:var(--ink);background:var(--surface)}
+  .np.on{display:block}
+  .np .bg{position:fixed;inset:-40px;background-size:cover;background-position:center;filter:blur(40px) saturate(1.3);
+          opacity:.45;transform:scale(1.1)}
+  .np .inner{position:relative;max-width:980px;margin:0 auto;padding:18px 20px 40px;display:grid;
+             grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:36px;align-items:start}
+  .np .topbar{grid-column:1/-1;display:flex;justify-content:space-between;align-items:center}
+  .np .art{width:100%;aspect-ratio:1;border-radius:16px;overflow:hidden;background:var(--thumb-bg);
+           box-shadow:0 24px 60px var(--shadow);display:flex;align-items:center;justify-content:center;font-size:90px}
+  .np .art img{width:100%;height:100%;object-fit:cover}
+  .np h2{font-size:26px;margin:18px 0 4px}
+  .np .who{font-size:15px;color:var(--ink-dim)}
+  .np .who a{color:var(--ink);text-decoration:none} .np .who a:hover{text-decoration:underline}
+  .np .seek{width:100%;margin:22px 0 4px;accent-color:var(--aqua)}
+  .np .times{display:flex;justify-content:space-between;font-size:12px;color:var(--ink-dim);font-variant-numeric:tabular-nums}
+  .np .ctl{display:flex;justify-content:center;align-items:center;gap:14px;margin:16px 0 8px}
+  .np .ctl .pbtn{width:48px;height:48px;font-size:22px}
+  .np .ctl .pbtn.big{width:66px;height:66px;font-size:28px}
+  .np .extra{display:flex;justify-content:center;gap:8px;flex-wrap:wrap;margin-top:6px}
+  .np .vol{display:flex;align-items:center;gap:8px;justify-content:center;margin-top:12px;font-size:14px}
+  .np .vol input{width:160px;accent-color:var(--aqua)}
+  .np .queue h3{margin:4px 0 8px;font-size:13px;letter-spacing:1.5px;text-transform:uppercase;color:var(--aqua-dim)}
+  .np .queue .row{cursor:pointer}
+  .np .queue .row.cur{background:var(--glass-strong)}
+  @media (max-width:760px){ .np .inner{grid-template-columns:1fr;gap:18px} .np .art{max-width:420px;margin:0 auto} }
+
+  /* Header search */
+  .search-box{flex:1;max-width:420px;min-width:200px;position:relative;align-self:center}
+  .search-box input{width:100%;padding-left:34px}
+  .search-box::before{content:"🔍";position:absolute;left:11px;top:50%;transform:translateY(-50%);font-size:13px;opacity:.7}
+  .editing{display:flex;align-items:center;gap:10px;flex-wrap:wrap;background:var(--glass-strong);border:1px solid var(--aqua);
+           border-radius:12px;padding:8px 12px;margin-bottom:14px;font-size:13px}
+  .row.flash{animation:flash 2.2s ease-out}
+  @keyframes flash{0%,30%{background:rgba(111,242,228,.35)}100%{background:transparent}}
+
+  /* Square cropper for cover uploads */
+  .modal{position:fixed;inset:0;z-index:50;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;padding:16px}
+  .modal .box{background:var(--surface);border:1px solid var(--line);border-radius:18px;padding:16px;width:min(460px,100%);
+              box-shadow:0 30px 80px var(--shadow)}
+  .crop{position:relative;width:100%;aspect-ratio:1;overflow:hidden;border-radius:12px;background:#000;touch-action:none;cursor:grab}
+  .crop.drag{cursor:grabbing}
+  .crop img{position:absolute;left:0;top:0;transform-origin:0 0;user-select:none;-webkit-user-drag:none;max-width:none}
+  .crop::after{content:"";position:absolute;inset:0;box-shadow:inset 0 0 0 2px rgba(255,255,255,.6);border-radius:12px;pointer-events:none}
+  .modal .zoom{display:flex;align-items:center;gap:10px;margin:12px 0}
+  .modal .zoom input{flex:1;accent-color:var(--aqua)}
 
   .toast{position:fixed;right:16px;top:16px;z-index:30;background:var(--surface);border:1px solid var(--aqua);
          border-radius:12px;padding:10px 14px;font-size:13px;opacity:0;transform:translateY(-8px);
@@ -264,6 +301,8 @@ DAY_MQ.addEventListener("change", () => applyTheme());
   <div class="top">
     <div><h1><a class="home" data-link href="/library">Aquaria Music Manager</a></h1>
       <div class="sub" id="stats">loading library…</div></div>
+    <div class="search-box"><input class="text" id="q" type="search" placeholder="Search songs, albums, artists…  ( / )"
+      autocomplete="off" aria-label="Search"></div>
     <div class="acct" id="acct"></div>
   </div>
 
@@ -279,25 +318,47 @@ DAY_MQ.addEventListener("change", () => applyTheme());
   <div class="panel" id="panel"></div>
 </div>
 
-<!-- currently-adding search -->
-<div class="fab" id="fab">
-  <div class="search">
-    <select id="editSel" title="Playlist that search results are added to"></select>
-    <input id="q" placeholder="Search songs, albums, artists…" autocomplete="off">
-    <div class="res" id="res"></div>
+<div class="player" id="player">
+  <div class="bar-prog"><i id="pProg"></i></div>
+  <button class="np-open" id="npOpen" title="Now Playing"><span class="ph" id="pArt">💿</span>
+    <span class="txt"><b id="pTitle"></b><small id="pWho"></small></span></button>
+  <span class="time" id="pTime"></span>
+  <div class="pctl">
+    <button class="pbtn opt" id="pShuf" title="Shuffle" aria-pressed="false">🔀</button>
+    <button class="pbtn" id="pPrev" title="Previous">⏮</button>
+    <button class="pbtn big" id="pPlay" title="Play / pause">▶</button>
+    <button class="pbtn" id="pNext" title="Next">⏭</button>
   </div>
-  <div class="bubble" id="fabBtn">✏️ <span id="fabLabel">Search</span> · 🔍</div>
+  <audio id="audio" preload="none"></audio>
 </div>
 
-<div class="player" id="player">
-  <div class="now" id="now"></div>
-  <div class="pctl">
-    <button class="pbtn" id="pPrev" title="Previous">⏮</button>
-    <button class="pbtn" id="pNext" title="Next">⏭</button>
-    <button class="pbtn" id="pShuf" title="Shuffle" aria-pressed="false">🔀</button>
+<div class="np" id="np" role="dialog" aria-label="Now Playing">
+  <div class="bg" id="npBg"></div>
+  <div class="inner">
+    <div class="topbar">
+      <button class="pbtn" id="npClose" title="Close (Esc)">⌄</button>
+      <span class="sub" style="margin:0">Now Playing</span>
+      <button class="pbtn" id="npMenu" title="More">⋯</button>
+    </div>
+    <div>
+      <div class="art" id="npArt">💿</div>
+      <h2 id="npTitle"></h2>
+      <div class="who" id="npWho"></div>
+      <input class="seek" id="npSeek" type="range" min="0" max="1000" value="0" aria-label="Seek">
+      <div class="times"><span id="npCur">0:00</span><span id="npDur">0:00</span></div>
+      <div class="ctl">
+        <button class="pbtn" id="npShuf" title="Shuffle" aria-pressed="false">🔀</button>
+        <button class="pbtn" id="npPrev" title="Previous">⏮</button>
+        <button class="pbtn big" id="npPlay" title="Play / pause">▶</button>
+        <button class="pbtn" id="npNext" title="Next">⏭</button>
+        <button class="pbtn" id="npRepeat" title="Repeat: off" aria-pressed="false">🔁</button>
+      </div>
+      <div class="vol">🔈<input id="npVol" type="range" min="0" max="1" step="0.01" value="1" aria-label="Volume">🔊</div>
+    </div>
+    <div class="queue"><h3>Up next</h3><div class="list" id="npQueue"></div></div>
   </div>
-  <audio id="audio" controls preload="none"></audio>
 </div>
+
 <div class="toast" id="toast"></div>
 
 <script>
@@ -313,9 +374,10 @@ let PLAYLISTS = [];          // every playlist visible to the viewer
 let MINE = [];               // the viewer's own (editable) playlists
 let ME = null;               // {username, lastfm_user} when logged in
 let LASTFM_OK = false;       // server has Last.fm API credentials
-let QUEUE = [];              // play queue of {rel_path,title,artist}
+let QUEUE = [];              // play queue of {rel_path,title,artist,album}
 let ORDER = [], POS = -1;    // play order (indices into QUEUE; shuffled when SHUFFLE) + position
 let SHUFFLE = false;         // remembered per browser
+let REPEAT = "off";          // off | all | one
 try { SHUFFLE = localStorage.getItem("aquaria.shuffle") === "1"; } catch(e){}
 
 async function api(path, opts){
@@ -404,12 +466,7 @@ async function loadUsers(){
 async function loadPlaylists(){
   PLAYLISTS = (await api("/api/playlists")).playlists;
   MINE = PLAYLISTS.filter(p=>p.is_mine);
-  $("#editSel").hidden = !ME;
-  $("#editSel").innerHTML = `<option value="">— click a result to play —</option>` +
-    MINE.map(p=>`<option value="${p.id}" ${p.id===EDITING?'selected':''}>Add to: ${esc(p.name)}</option>`).join("");
-  const cur = MINE.find(p=>p.id===EDITING);
-  if(!cur) EDITING = null;
-  $("#fabLabel").textContent = cur ? `Editing ${cur.name}` : "Search";
+  if(!MINE.find(p=>p.id===EDITING)) EDITING = null;
 }
 
 // ── Player ──────────────────────────────────────────────────────────────────
@@ -437,7 +494,7 @@ function setOrder(first){
 
 // Play `tracks` starting at index i (with shuffle on, the rest follow in random order).
 function play(tracks, i){
-  QUEUE = tracks;
+  QUEUE = tracks.slice();
   if(!QUEUE[i]) return;
   setOrder(i);
   playAt(POS);
@@ -448,30 +505,122 @@ function shufflePlay(tracks){
   setShuffle(true);
   play(tracks, Math.floor(Math.random() * tracks.length));
 }
+const current = () => QUEUE[ORDER[POS]];
+// Queue edits: "Play next" goes right after the current song, "Add to queue" at the end.
+function enqueue(tracks, nextUp){
+  if(!tracks.length) return;
+  if(!current()) return play(tracks, 0);
+  const start = QUEUE.length;
+  QUEUE.push(...tracks);
+  const idx = tracks.map((_, k)=>start + k);
+  if(nextUp) ORDER.splice(POS + 1, 0, ...idx); else ORDER.push(...idx);
+  toast(`${nextUp ? "Playing next" : "Added to queue"}: ${tracks.length === 1 ? tracks[0].title : tracks.length + " songs"}`);
+  renderQueue();
+}
+function dropFromQueue(pos){
+  if(pos === POS) return;
+  ORDER.splice(pos, 1);
+  if(pos < POS) POS--;
+  renderQueue();
+}
 
 function playAt(pos, convert=false){
   POS = pos;
-  const t = QUEUE[ORDER[POS]]; if(!t) return;
+  const t = current(); if(!t) return;
   const a = $("#audio");
   if(!convert) scrobbleStart(t);                // a converted retry is the same play
   a.src = srcFor(t, convert);
   a.play().catch(()=>{});                       // failures arrive as the "error" event
-  $("#now").innerHTML = `▶ <b>${esc(t.title)}</b> <small>· ${esc(t.artist||"")}</small>`;
   $("#player").classList.add("on"); document.body.classList.add("playing");
   document.querySelectorAll(".row.playing").forEach(r=>r.classList.remove("playing"));
   document.querySelectorAll(`.row[data-rel="${CSS.escape(t.rel_path)}"]`).forEach(r=>r.classList.add("playing"));
+  renderNow();
 }
-const next = () => { if(POS + 1 < ORDER.length) playAt(POS + 1); };
+function next(auto=false){
+  if(auto && REPEAT === "one") return playAt(POS);
+  if(POS + 1 < ORDER.length) return playAt(POS + 1);
+  if(REPEAT === "all" && ORDER.length) return playAt(0);
+  if(!auto) return;
+  $("#audio").pause(); renderPlayState();       // end of the queue
+}
 function prev(){
   const a = $("#audio");
   if(a.currentTime > 3 || POS <= 0) a.currentTime = 0; else playAt(POS - 1);
 }
+function togglePlay(){
+  const a = $("#audio");
+  if(!current()) return;
+  a.paused ? a.play().catch(()=>{}) : a.pause();
+}
 function setShuffle(on){
   SHUFFLE = on;
   try { localStorage.setItem("aquaria.shuffle", on ? "1" : "0"); } catch(e){}
-  $("#pShuf").setAttribute("aria-pressed", String(on));
+  ["#pShuf", "#npShuf"].forEach(id=>$(id).setAttribute("aria-pressed", String(on)));
   if(QUEUE.length && POS >= 0) setOrder(ORDER[POS]);   // keep the current track playing
+  renderQueue();
 }
+function cycleRepeat(){
+  REPEAT = {off: "all", all: "one", one: "off"}[REPEAT];
+  const b = $("#npRepeat");
+  b.textContent = REPEAT === "one" ? "🔂" : "🔁";
+  b.title = `Repeat: ${REPEAT}`; b.setAttribute("aria-pressed", String(REPEAT !== "off"));
+}
+
+// ── Mini player + Now Playing view ──────────────────────────────────────────
+const albumOf = t => t.rel_path.split("/").slice(0, -1).join("/");
+const artFor = t => `/art/${enc(albumOf(t))}?v=${IMGV}`;
+const clock = s => !isFinite(s) || s < 0 ? "–:––" : `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
+function artImg(t, cls=""){
+  return `<img class="${cls}" src="${artFor(t)}" alt="" onerror="this.replaceWith(Object.assign(document.createElement('span'),{className:'ph',textContent:'💿'}))">`;
+}
+function renderNow(){
+  const t = current(); if(!t) return;
+  $("#pArt").outerHTML = `<span id="pArt">${artImg(t)}</span>`;
+  $("#pTitle").textContent = t.title;
+  $("#pWho").textContent = [t.artist, t.album].filter(Boolean).join(" · ");
+  $("#npArt").innerHTML = `<img src="${artFor(t)}" alt="" onerror="this.parentNode.textContent='💿'">`;
+  $("#npBg").style.backgroundImage = `url("${artFor(t)}")`;
+  $("#npTitle").textContent = t.title;
+  const folder = albumOf(t);
+  $("#npWho").innerHTML = `${t.artist ? `<a data-link href="/artist/${encodeURIComponent(t.artist)}">${esc(t.artist)}</a>` : ""}
+    ${t.album ? ` · <a data-link href="/album/${enc(folder)}?track=${encodeURIComponent(t.rel_path)}">${esc(t.album)}</a>` : ""}`;
+  document.title = `${t.title} · ${t.artist || "Aquaria"}`;
+  if("mediaSession" in navigator){
+    navigator.mediaSession.metadata = new MediaMetadata({title: t.title, artist: t.artist || "", album: t.album || "",
+      artwork: [{src: new URL(artFor(t), location.href).href, sizes: "512x512"}]});
+  }
+  renderQueue(); renderPlayState();
+}
+function renderPlayState(){
+  const on = !$("#audio").paused;
+  $("#pPlay").textContent = $("#npPlay").textContent = on ? "⏸" : "▶";
+  if("mediaSession" in navigator) navigator.mediaSession.playbackState = on ? "playing" : "paused";
+}
+function renderTime(){
+  const a = $("#audio"), d = a.duration, c = a.currentTime;
+  $("#pProg").style.width = isFinite(d) && d ? `${100 * c / d}%` : "0";
+  $("#pTime").textContent = `${clock(c)} / ${clock(d)}`;
+  $("#npCur").textContent = clock(c); $("#npDur").textContent = clock(d);
+  if(!SEEKING) $("#npSeek").value = isFinite(d) && d ? Math.round(1000 * c / d) : 0;
+}
+function renderQueue(){
+  if(!$("#np").classList.contains("on")) return;     // only drawn while it's open
+  const rows = ORDER.slice(POS, POS + 60).map((qi, k)=>{
+    const t = QUEUE[qi], pos = POS + k;
+    return `<div class="row ${k===0?'cur':''}" data-qpos="${pos}">
+      <div class="num">${k===0 ? "▶" : k}</div>
+      <div class="main">${esc(t.title)} <small>· ${esc(t.artist||"")}</small></div>
+      ${k ? `<div class="acts"><button class="btn icon danger" data-qdrop="${pos}" title="Remove from queue">✕</button></div>` : ""}
+    </div>`;
+  }).join("");
+  const more = ORDER.length - POS - 60;
+  $("#npQueue").innerHTML = rows + (more > 0 ? `<div class="empty" style="padding:10px">+ ${more} more</div>` : "") +
+    (ORDER.length - POS <= 1 ? `<div class="empty" style="padding:14px">Nothing queued after this song.</div>` : "");
+}
+function openNP(){ if(!current()) return; $("#np").classList.add("on"); document.body.style.overflow = "hidden"; renderNow(); }
+function closeNP(){ $("#np").classList.remove("on"); document.body.style.overflow = ""; }
+
+let SEEKING = false;
 
 // Last.fm for web plays: "now playing" when a track starts, then a scrobble once it has
 // been heard for half its length or 4 minutes (Last.fm's rule). Only time actually played
@@ -501,21 +650,51 @@ $("#audio").addEventListener("timeupdate", () => {
   scrobbleCheck();
 });
 $("#audio").addEventListener("seeking", () => { if(PLAY) PLAY.last = null; });
-$("#audio").onended = () => { scrobbleCheck(true); next(); };
+$("#audio").onended = () => { scrobbleCheck(true); next(true); };
 $("#audio").onerror = () => {
   const t = QUEUE[ORDER[POS]]; if(!t) return;
   if(!$("#audio").src.includes("/stream/")) return playAt(POS, true);   // retry converted
   toast(`Can't play “${t.title}” — skipping`);
-  if(POS + 1 < ORDER.length) setTimeout(next, 800);
+  if(POS + 1 < ORDER.length) setTimeout(()=>next(), 800);
 };
-$("#pNext").onclick = next;
-$("#pPrev").onclick = prev;
-$("#pShuf").onclick = () => setShuffle(!SHUFFLE);
-$("#pShuf").setAttribute("aria-pressed", String(SHUFFLE));
+const A = $("#audio");
+A.addEventListener("timeupdate", renderTime);
+A.addEventListener("durationchange", renderTime);
+["play", "pause"].forEach(ev=>A.addEventListener(ev, renderPlayState));
+["#pNext", "#npNext"].forEach(id=>$(id).onclick = ()=>next());
+["#pPrev", "#npPrev"].forEach(id=>$(id).onclick = prev);
+["#pPlay", "#npPlay"].forEach(id=>$(id).onclick = togglePlay);
+["#pShuf", "#npShuf"].forEach(id=>{ $(id).onclick = () => setShuffle(!SHUFFLE); $(id).setAttribute("aria-pressed", String(SHUFFLE)); });
+$("#npRepeat").onclick = cycleRepeat;
+$("#npOpen").onclick = openNP;
+$("#npClose").onclick = closeNP;
+$("#npMenu").onclick = e=>{ e.stopPropagation(); const t = current(); if(t) showAddPop(e.currentTarget, {rel_paths:[t.rel_path]}, [t], {queue:false}); };
+$("#np").addEventListener("click", e=>{ if(e.target.closest("a[data-link]")) closeNP(); });
+$("#npSeek").addEventListener("input", ()=>{ SEEKING = true; const d = A.duration;
+  if(isFinite(d)) $("#npCur").textContent = clock(d * $("#npSeek").value / 1000); });
+$("#npSeek").addEventListener("change", ()=>{ const d = A.duration;
+  if(isFinite(d)) A.currentTime = d * $("#npSeek").value / 1000; SEEKING = false; });
+$("#npVol").oninput = e=>{ A.volume = +e.target.value; };
+$("#npQueue").onclick = e=>{
+  const d = e.target.closest("[data-qdrop]"); if(d){ e.stopPropagation(); return dropFromQueue(+d.dataset.qdrop); }
+  const r = e.target.closest("[data-qpos]"); if(r && +r.dataset.qpos !== POS) playAt(+r.dataset.qpos);
+};
+document.addEventListener("keydown", e=>{
+  const typing = e.target.closest("input,textarea,select");
+  if(e.key === "Escape" && $("#np").classList.contains("on")) return closeNP();
+  if(typing) return;
+  if(e.key === "/"){ e.preventDefault(); $("#q").focus(); }
+  else if(e.key === " " && current()){ e.preventDefault(); togglePlay(); }
+});
+if("mediaSession" in navigator){
+  const ms = navigator.mediaSession;
+  ms.setActionHandler("play", togglePlay); ms.setActionHandler("pause", togglePlay);
+  ms.setActionHandler("nexttrack", ()=>next()); ms.setActionHandler("previoustrack", prev);
+}
 
 // ── Add-to-playlist popover ─────────────────────────────────────────────────
 function closePop(){ document.querySelectorAll(".pop").forEach(p=>p.remove()); }
-document.addEventListener("click", e=>{ if(!e.target.closest(".pop,[data-add]")) closePop(); });
+document.addEventListener("click", e=>{ if(!e.target.closest(".pop,[data-add],#npMenu")) closePop(); });
 
 async function addTo(pid, payload){
   const r = await post(`/api/playlists/${pid}/tracks`, payload);
@@ -537,22 +716,114 @@ async function newPlaylist(){
   catch(e){ toast(e.message); return null; }
 }
 
-function showAddPop(btn, payload){
+// The "⋯" menu for a song or album: play / queue it, open its album, or add it to a playlist.
+// `payload` is what a playlist add sends ({rel_paths} or {folder}); `tracks` enables the queue
+// actions. opts.album=false hides "Go to album" (already there), opts.queue=false the queue part.
+function showAddPop(btn, payload, tracks=null, opts={}){
   closePop();
-  if(!ME) return needLogin("make playlists");
-  const pop = document.createElement("div"); pop.className="pop";
-  pop.innerHTML = MINE.map(p=>`<div data-pid="${p.id}">${esc(p.name)}</div>`).join("") +
-                  `<div class="new">+ New playlist…</div>`;
-  const r = btn.getBoundingClientRect();
-  pop.style.top = (window.scrollY + r.bottom + 4) + "px";
-  pop.style.left = Math.max(8, Math.min(window.scrollX + r.right - 200, innerWidth - 216)) + "px";
+  const q = tracks && tracks.length && opts.queue !== false;
+  const one = tracks && tracks.length === 1 ? tracks[0] : null;
+  const pop = document.createElement("div"); pop.className = "pop";
+  pop.innerHTML = (q ? `<div data-act="play">▶ Play${one ? "" : " all"}</div>
+      <div data-act="next">⏭ Play next</div><div data-act="queue">☰ Add to queue</div>` : "") +
+    (one && opts.album !== false ? `<div data-act="album">💿 Go to album</div>` : "") +
+    (ME ? `<div class="grp" style="cursor:default;font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--aqua-dim)">Add to playlist</div>` +
+          MINE.map(p=>`<div data-pid="${p.id}">${esc(p.name)}</div>`).join("") + `<div class="new">+ New playlist…</div>`
+        : `<div data-act="login">Log in to add to a playlist</div>`);
+  document.body.appendChild(pop);
+  const r = btn.getBoundingClientRect(), h = pop.offsetHeight;
+  const below = r.bottom + 4 + h < innerHeight;
+  pop.style.position = "fixed";
+  pop.style.top = (below ? r.bottom + 4 : Math.max(8, r.top - h - 4)) + "px";
+  pop.style.left = Math.max(8, Math.min(r.right - 220, innerWidth - 236)) + "px";
+  pop.style.maxHeight = "70vh"; pop.style.overflow = "auto"; pop.style.zIndex = 60;
   pop.onclick = async e=>{
-    const d = e.target.closest("div"); if(!d) return;
+    const d = e.target.closest("div[data-act],div[data-pid],div.new"); if(!d) return;
     closePop();
+    const act = d.dataset.act;
+    if(act === "play") return play(tracks, 0);
+    if(act === "next" || act === "queue") return enqueue(tracks, act === "next");
+    if(act === "album"){ closeNP(); return go(`/album/${enc(albumOf(one))}?track=${encodeURIComponent(one.rel_path)}`); }
+    if(act === "login") return needLogin("make playlists");
     const pid = d.dataset.pid ? +d.dataset.pid : await newPlaylist();
     if(pid) addTo(pid, payload);
   };
-  document.body.appendChild(pop);
+}
+
+// ── Square cropper for cover uploads ────────────────────────────────────────
+// Resolves to a 1000×1000 JPEG of the framed square, or null if cancelled. The browser
+// applies a photo's EXIF orientation when drawing it, and "Rotate" turns it by hand.
+function cropSquare(file){
+  if(!file) return Promise.resolve(null);
+  return new Promise(resolve=>{
+    const m = document.createElement("div"); m.className = "modal";
+    m.innerHTML = `<div class="box" role="dialog" aria-label="Crop cover">
+      <h3 style="margin:0 0 10px">Crop cover</h3>
+      <div class="crop"><img alt=""></div>
+      <div class="zoom">➖<input type="range" min="1" max="5" step="0.01" value="1" aria-label="Zoom">➕</div>
+      <div class="sub" style="margin:0 0 12px">Drag to move · scroll, pinch or slide to zoom</div>
+      <div class="bar" style="justify-content:flex-end;gap:8px">
+        <button class="btn" data-rot title="Rotate 90°">⟳ Rotate</button>
+        <span style="flex:1"></span>
+        <button class="btn" data-x>Cancel</button><button class="btn primary" data-ok>Use photo</button></div></div>`;
+    document.body.appendChild(m);
+    const area = m.querySelector(".crop"), img = m.querySelector("img"), zoom = m.querySelector("input");
+    let url = URL.createObjectURL(file), S = 0, base = 1, z = 1, x = 0, y = 0;
+    const scale = () => base * z;
+    const clamp = () => {
+      const w = img.naturalWidth * scale(), h = img.naturalHeight * scale();
+      x = Math.min(0, Math.max(S - w, x)); y = Math.min(0, Math.max(S - h, y));
+      img.style.transform = `translate(${x}px,${y}px) scale(${scale()})`;
+    };
+    const zoomTo = (nz, px = S / 2, py = S / 2) => {     // keep the point under (px, py) still
+      nz = Math.min(5, Math.max(1, nz));
+      const r = (base * nz) / scale(); x = px - (px - x) * r; y = py - (py - y) * r; z = nz;
+      zoom.value = z; clamp();
+    };
+    const fit = () => {
+      S = area.clientWidth; base = S / Math.min(img.naturalWidth, img.naturalHeight); z = 1; zoom.value = 1;
+      x = (S - img.naturalWidth * base) / 2; y = (S - img.naturalHeight * base) / 2; clamp();
+    };
+    img.onload = fit;
+    img.onerror = () => { toast("That file isn't an image this browser can open"); done(null); };
+    img.src = url;
+    const pts = new Map(); let pinch = null;
+    area.addEventListener("pointerdown", e => { try { area.setPointerCapture(e.pointerId); } catch(_){}
+      pts.set(e.pointerId, [e.clientX, e.clientY]);
+      area.classList.add("drag"); });
+    area.addEventListener("pointermove", e => {
+      if(!pts.has(e.pointerId)) return;
+      const [ox, oy] = pts.get(e.pointerId); pts.set(e.pointerId, [e.clientX, e.clientY]);
+      if(pts.size === 2){
+        const [a, b] = [...pts.values()], d = Math.hypot(a[0] - b[0], a[1] - b[1]);
+        const r = area.getBoundingClientRect();
+        if(pinch) zoomTo(z * d / pinch, (a[0] + b[0]) / 2 - r.left, (a[1] + b[1]) / 2 - r.top);
+        pinch = d; return;
+      }
+      x += e.clientX - ox; y += e.clientY - oy; clamp();
+    });
+    const up = e => { pts.delete(e.pointerId); pinch = null; if(!pts.size) area.classList.remove("drag"); };
+    area.addEventListener("pointerup", up); area.addEventListener("pointercancel", up);
+    area.addEventListener("wheel", e => { e.preventDefault(); const r = area.getBoundingClientRect();
+      zoomTo(z * Math.exp(-e.deltaY / 400), e.clientX - r.left, e.clientY - r.top); }, {passive: false});
+    zoom.oninput = () => zoomTo(+zoom.value);
+    m.querySelector("[data-rot]").onclick = () => {          // bake a 90° turn into a new image
+      const c = document.createElement("canvas"); c.width = img.naturalHeight; c.height = img.naturalWidth;
+      const g = c.getContext("2d"); g.translate(c.width, 0); g.rotate(Math.PI / 2); g.drawImage(img, 0, 0);
+      c.toBlob(b => { URL.revokeObjectURL(url); url = URL.createObjectURL(b); img.src = url; }, "image/png");
+    };
+    const done = v => { URL.revokeObjectURL(url); m.remove(); document.removeEventListener("keydown", key); resolve(v); };
+    const key = e => { if(e.key === "Escape") done(null); };
+    document.addEventListener("keydown", key);
+    m.querySelector("[data-x]").onclick = () => done(null);
+    m.addEventListener("click", e => { if(e.target === m) done(null); });
+    m.querySelector("[data-ok]").onclick = () => {
+      const side = S / scale(), out = Math.min(1000, Math.round(side)) || 1000;
+      const c = document.createElement("canvas"); c.width = c.height = out;
+      c.getContext("2d").drawImage(img, -x / scale(), -y / scale(), side, side, 0, 0, out, out);
+      c.toBlob(b => done(b), "image/jpeg", 0.92);
+    };
+  });
 }
 
 // ── Library ─────────────────────────────────────────────────────────────────
@@ -793,7 +1064,7 @@ async function renderAlbum(folder){
           <button class="btn primary" id="playAll">▶ Play</button>
           <button class="btn" id="shufAll">🔀 Shuffle</button>
           <a class="btn" href="/download/album?folder=${encodeURIComponent(folder)}">⬇ Download album (.zip)</a>
-          <button class="btn" data-add id="addAll">＋ Add to playlist</button>
+          <button class="btn" data-add id="addAll" title="Play next, add to queue or to a playlist">⋯ More</button>
           ${ME ? `<button class="btn" id="findCover" hidden title="From the album's own files, else Deezer / iTunes">🔍 Find cover</button>` : ""}
           ${ME ? `<label class="btn" title="Saved as cover.jpg in the album folder">⬆ Upload cover<input type="file" id="coverUpload" accept="image/jpeg,image/png,image/webp" hidden></label>` : ""}
         </div>
@@ -806,13 +1077,17 @@ async function renderAlbum(folder){
         <div class="main">${esc(t.title)} <small>· ${esc((t.ext||'').toUpperCase())}</small></div>
         <div class="acts">
           <a class="btn icon" href="/download/track/${enc(t.rel_path)}" title="Download">⬇</a>
-          <button class="btn icon" data-add="${i}" title="Add to playlist">＋</button>
+          <button class="btn icon" data-add="${i}" title="Play next, add to queue or to a playlist">⋯</button>
         </div>
       </div>`).join("")}</div>`;
   setTitle(`${al.album} — ${al.artist}`);
   $("#playAll").onclick = ()=>play(tracks, 0);
   $("#shufAll").onclick = ()=>shufflePlay(tracks);
-  $("#addAll").onclick = e=>{ e.stopPropagation(); showAddPop(e.currentTarget, {folder}); };
+  $("#addAll").onclick = e=>{ e.stopPropagation(); showAddPop(e.currentTarget, {folder}, tracks, {album:false}); };
+  // Arrived from a search result / "Go to album": point at that song.
+  const want = new URLSearchParams(location.search).get("track");
+  const hit = want && document.querySelector(`.row[data-rel="${CSS.escape(want)}"]`);
+  if(hit){ hit.classList.add("flash"); hit.scrollIntoView({block: "center"}); }
   if(ME) $("#findCover").onclick = async e=>{
     e.currentTarget.disabled = true; e.currentTarget.textContent = "🔍 Looking…";
     try {
@@ -821,8 +1096,8 @@ async function renderAlbum(folder){
     } catch(err){ toast(err.message); e.currentTarget.disabled = false; e.currentTarget.textContent = "🔍 Find cover"; }
   };
   if(ME) $("#coverUpload").onchange = async e=>{
-    const f = e.target.files[0]; if(!f) return;
-    const fd = new FormData(); fd.append("rel_dir", folder); fd.append("file", f);
+    const f = await cropSquare(e.target.files[0]); e.target.value = ""; if(!f) return;
+    const fd = new FormData(); fd.append("rel_dir", folder); fd.append("file", f, "cover.jpg");
     try {
       await api("/api/folder-art/upload", {method:"POST", body:fd});
       IMGV = Date.now(); toast("Cover saved"); renderAlbum(folder);
@@ -830,7 +1105,7 @@ async function renderAlbum(folder){
   };
   document.querySelectorAll("[data-play]").forEach(b=>b.onclick=()=>play(tracks, +b.dataset.play));
   document.querySelectorAll(".row [data-add]").forEach(b=>b.onclick=e=>{
-    e.stopPropagation(); showAddPop(b, {rel_paths:[tracks[+b.dataset.add].rel_path]}); });
+    e.stopPropagation(); showAddPop(b, {rel_paths:[tracks[+b.dataset.add].rel_path]}, [tracks[+b.dataset.add]], {album:false}); });
 }
 
 // ── Playlists ───────────────────────────────────────────────────────────────
@@ -893,6 +1168,7 @@ async function renderPlaylist(pid){
         <div class="bar">
           <button class="btn primary" id="playAll" ${playable.length?'':'disabled'}>▶ Play</button>
           <button class="btn" id="shufAll" ${playable.length?'':'disabled'}>🔀 Shuffle</button>
+          <button class="btn" id="plQueue" ${playable.length?'':'disabled'} title="Play next or add to the queue">⋯ More</button>
           <a class="btn" href="/download/playlist/${pid}">⬇ Download (.zip)</a>
           ${mine ? `<button class="btn" id="edit">${editing?'✓ Adding from search':'✏️ Add songs via search'}</button>
           <label class="btn" title="Also copied to the iPod as “${esc(pl.name)}.jpg” next to the playlist">🖼 ${pl.cover ? "Change cover" : "Add cover"}<input type="file" id="plCover" accept="image/jpeg,image/png,image/webp" hidden></label>
@@ -910,23 +1186,28 @@ async function renderPlaylist(pid){
           : `<small title="not found in library">⚠ ${esc(it.raw_line)}</small>`}</div>
         <div class="acts">
           ${it.rel_path?`<button class="btn icon" data-play="${esc(it.rel_path)}" title="Play">▶</button>
-          <a class="btn icon" href="/download/track/${enc(it.rel_path)}" title="Download">⬇</a>`:''}
+          <button class="btn icon" data-add="${esc(it.rel_path)}" title="Play next, add to queue or another playlist">⋯</button>`:''}
           ${mine ? `<button class="btn icon" data-mv="${it.item_id}:-1" title="Move up">↑</button>
           <button class="btn icon" data-mv="${it.item_id}:1" title="Move down">↓</button>
           <button class="btn icon danger" data-rm="${it.item_id}" title="Remove">✕</button>` : ""}
         </div>
       </div>`).join("")}</div>`
-    : `<div class="empty">Empty${mine ? " — click “Add songs via search”, or use ＋ on any album." : "."}</div>`}`;
+    : `<div class="empty">Empty${mine ? " — click “Add songs via search”, or use ⋯ on any album or song." : "."}</div>`}`;
   $("#playAll").onclick = ()=>play(playable, 0);
+  $("#plQueue").onclick = e=>{ e.stopPropagation();
+    showAddPop(e.currentTarget, {rel_paths: playable.map(t=>t.rel_path)}, playable, {album:false}); };
+  document.querySelectorAll(".row [data-add]").forEach(b=>b.onclick=e=>{ e.stopPropagation();
+    const t = playable.find(x=>x.rel_path===b.dataset.add); showAddPop(b, {rel_paths:[t.rel_path]}, [t]); });
   $("#shufAll").onclick = ()=>shufflePlay(playable);
   document.querySelectorAll("[data-play]").forEach(b=>b.onclick=()=>
     play(playable, playable.findIndex(t=>t.rel_path===b.dataset.play)));
   if(!mine) return;
   $("#edit").onclick = ()=>{ EDITING = editing ? null : pid; loadPlaylists();
-    if(!editing){ $("#fab").classList.add("open"); $("#q").focus(); } renderPlaylist(pid); };
+    if(!editing){ $("#q").focus(); toast("Search above — ＋ adds a song or album to this playlist"); }
+    renderPlaylist(pid); };
   $("#plCover").onchange = async e=>{
-    const f = e.target.files[0]; if(!f) return;
-    const fd = new FormData(); fd.append("file", f);
+    const f = await cropSquare(e.target.files[0]); e.target.value = ""; if(!f) return;
+    const fd = new FormData(); fd.append("file", f, "cover.jpg");
     try { await api(`/api/playlists/${pid}/cover`, {method:"POST", body:fd}); toast("Cover saved"); renderPlaylist(pid); }
     catch(err){ toast(err.message); }
   };
@@ -1315,42 +1596,78 @@ function route(){
     case "ipod":      return renderIpods();
     case "user":      return renderUser(rest.join("/"));
     case "users":     return renderUsers();
+    case "search":    return renderSearch();
     case "login":     return renderAuth("login");
     case "signup":    return renderAuth("signup");
     default:          return notFound("Page not found", "/library", "Library");
   }
 }
 
-// ── currently-adding search ─────────────────────────────────────────────────
-$("#fabBtn").onclick=()=>{ $("#fab").classList.toggle("open"); if($("#fab").classList.contains("open")) $("#q").focus(); };
-$("#editSel").onchange=e=>{ EDITING = e.target.value ? +e.target.value : null; loadPlaylists(); };
-let timer, RES = null;
-$("#q").oninput=e=>{
-  clearTimeout(timer);
-  timer=setTimeout(async()=>{
-    const q=e.target.value.trim();
-    if(!q){$("#res").innerHTML="";return;}
-    RES = await api("/api/search?q="+encodeURIComponent(q));
-    const verb = EDITING ? "＋" : "";
-    const sec=(label,arr,fmt)=>arr.length?`<div class="grp">${label}</div>`+arr.map(fmt).join(""):"";
-    $("#res").innerHTML =
-      sec("Albums",RES.albums.slice(0,8),(a,i)=>`<div class="item" data-sa="${i}"><span class="main">💿 ${esc(a.artist)} — ${esc(a.album)}${yr(a.year)}</span>${verb}</div>`)+
-      sec("Tracks",RES.tracks,(t,i)=>`<div class="item" data-st="${i}"><span class="main">🎵 ${esc(t.title)} <small>· ${esc(t.artist)}</small></span>${verb||'▶'}</div>`);
-    if(!RES.tracks.length) $("#res").innerHTML = `<div class="item"><small>No matches</small></div>`;
-  },180);
-};
-$("#res").onclick = e=>{
-  const it = e.target.closest(".item"); if(!it || !RES) return;
-  if(it.dataset.sa!==undefined){
-    const a = RES.albums[+it.dataset.sa];
-    if(EDITING) addTo(EDITING, {folder:a.folder}); else go("/album/"+enc(a.folder));
-  } else if(it.dataset.st!==undefined){
-    const t = RES.tracks[+it.dataset.st];
-    EDITING ? addTo(EDITING, {rel_paths:[t.rel_path]}) : play([t], 0);
+// ── Search (header box → /search?q=…) ────────────────────────────────────────
+// A song opens its album (scrolled to it) — playing is the ▶ / ⋯ buttons. While a playlist
+// is being filled ("Add songs via search"), every result gets a ＋ that adds it there.
+let RES = null, QTIMER;
+$("#q").addEventListener("input", e=>{
+  clearTimeout(QTIMER);
+  QTIMER = setTimeout(()=>{
+    const q = e.target.value.trim(), url = q ? "/search?q=" + encodeURIComponent(q) : "/search";
+    if(location.pathname === "/search"){ history.replaceState(null, "", url); renderSearch(); } else go(url);
+  }, 200);
+});
+$("#q").addEventListener("keydown", e=>{ if(e.key === "Escape"){ e.target.value = ""; e.target.blur(); } });
+
+async function renderSearch(){
+  const nav = NAV, q = new URLSearchParams(location.search).get("q") || "";
+  if(document.activeElement !== $("#q")) $("#q").value = q;
+  setTitle(q ? `Search: ${q}` : "Search");
+  const cur = MINE.find(p=>p.id===EDITING);
+  const banner = cur ? `<div class="editing">✏️ Adding to ${plLink(cur.id, cur.name)} — ＋ adds a song or album there.
+      <button class="btn" id="doneEdit">Done</button></div>` : "";
+  if(!q){
+    $("#panel").innerHTML = banner + `<div class="empty">Type in the search box above — songs, albums or artists.</div>`;
+    wireSearch(); return;
   }
-  if(EDITING && location.pathname === "/playlist/"+EDITING)
-    setTimeout(()=>renderPlaylist(EDITING), 150);
-};
+  RES = await api("/api/search?q=" + encodeURIComponent(q));
+  if(nav !== NAV) return;
+  const add = (kind, i) => cur ? `<button class="btn icon" data-sadd="${kind}:${i}" title="Add to ${esc(cur.name)}">＋</button>` : "";
+  const albums = RES.albums.slice(0, 12), artists = RES.artists.slice(0, 12);
+  $("#panel").innerHTML = banner + (!RES.tracks.length ? `<div class="empty">No matches for “${esc(q)}”.</div>` : `
+    ${albums.length ? `<div class="sec-h">Albums</div><div class="grid">${albums.map((a, i)=>`
+      <div>${albumTile({...a, n_tracks: RES.tracks.filter(t=>albumOf(t)===a.folder).length + "+"},
+                       a.artist)}${cur ? `<div style="margin-top:4px">${add("a", i)}</div>` : ""}</div>`).join("")}</div>` : ""}
+    ${artists.length ? `<div class="sec-h">Artists</div><div class="bar" style="flex-wrap:wrap;gap:6px">${artists.map(a=>
+      `<a class="btn" data-link href="/artist/${encodeURIComponent(a.artist)}">👤 ${esc(a.artist)}</a>`).join("")}</div>` : ""}
+    <div class="sec-h">Songs</div>
+    <div class="list">${RES.tracks.map((t, i)=>`
+      <div class="row click" data-rel="${esc(t.rel_path)}" data-sopen="${i}" title="Open the album">
+        <button class="btn icon hoverplay" data-splay="${i}" title="Play">▶</button>
+        <div class="main">${esc(t.title)} <small>· ${esc(t.artist)} — ${esc(t.album)}${yr(t.year)}</small></div>
+        <div class="acts">${add("t", i)}
+          <button class="btn icon" data-smenu="${i}" title="Play next, add to queue or a playlist">⋯</button></div>
+      </div>`).join("")}</div>`);
+  const playing = current();
+  if(playing) document.querySelectorAll(`.row[data-rel="${CSS.escape(playing.rel_path)}"]`).forEach(r=>r.classList.add("playing"));
+  wireSearch();
+}
+function wireSearch(){
+  $("#doneEdit") && ($("#doneEdit").onclick = ()=>{ const pid = EDITING; EDITING = null; go("/playlist/" + pid); });
+  $("#panel").onclick = e=>{
+    if(location.pathname !== "/search" || !RES) return;
+    const b = e.target.closest("[data-splay],[data-smenu],[data-sadd],[data-sopen]"); if(!b) return;
+    if(b.dataset.sadd){
+      e.stopPropagation();
+      const [kind, i] = b.dataset.sadd.split(":");
+      return addTo(EDITING, kind === "a" ? {folder: RES.albums[+i].folder} : {rel_paths: [RES.tracks[+i].rel_path]});
+    }
+    if(b.dataset.splay !== undefined){ e.stopPropagation(); return play(RES.tracks, +b.dataset.splay); }
+    if(b.dataset.smenu !== undefined){
+      e.stopPropagation(); const t = RES.tracks[+b.dataset.smenu];
+      return showAddPop(b, {rel_paths: [t.rel_path]}, [t]);
+    }
+    const t = RES.tracks[+b.dataset.sopen];
+    go(`/album/${enc(albumOf(t))}?track=${encodeURIComponent(t.rel_path)}`);
+  };
+}
 
 (async ()=>{
   await loadMe();
